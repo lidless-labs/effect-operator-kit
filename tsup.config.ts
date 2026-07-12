@@ -1,17 +1,14 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: ["src/index.ts", "src/cli.ts", "src/mcp-bin.ts"],
+  entry: ["src/index.ts"],
   format: ["esm"],
   target: "node20",
   outDir: "dist",
   clean: true,
   sourcemap: true,
+  // Declarations come from `tsc -p tsconfig.build.json`; tsup's dts rollup
+  // crashes against the TypeScript 7 native compiler shim.
   dts: false,
-  // Each bin must be self-contained; no shared chunk imports between the two
-  // executables and the server module.
   splitting: false,
-  banner: {
-    js: "#!/usr/bin/env node",
-  },
 });
