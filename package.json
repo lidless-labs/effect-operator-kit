@@ -1,0 +1,29 @@
+{
+  "name": "@lidless-labs/effect-operator-kit",
+  "version": "0.1.0",
+  "description": "Shared Effect plumbing for lidless operator CLIs: config primitives, HTTP request kernel, typed error algebra, opt-in retry, redaction, and MCP result helpers.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --clean && tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "effect": "^3.21.4"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "tsup": "^8.4.0",
+    "vitest": "^4.1.5"
+  }
+}
