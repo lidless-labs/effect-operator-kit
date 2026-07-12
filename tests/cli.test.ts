@@ -15,6 +15,9 @@ import {
   UnexpectedStatusError,
 } from "../src/errors.js";
 
+const GHP_TOKEN = "ghp_abcdefghijklmnop";
+const N8N_KEY = "n8n-secret-key-value";
+
 describe("formatOperatorError", () => {
   it("formats ConfigError using its message", () => {
     const error = new ConfigError({
@@ -90,6 +93,18 @@ describe("writeOperatorError", () => {
     expect(err).toHaveBeenCalledTimes(1);
     expect(err.mock.calls[0]![0]).toContain("X");
   });
+
+  it("redacts secrets in OperatorError messages", () => {
+    const err = vi.fn();
+    const error = new ConfigError({
+      message: `failed https://${GHP_TOKEN}@github.com with X-N8N-API-KEY: ${N8N_KEY}`,
+    });
+    writeOperatorError(error, err);
+    const line = String(err.mock.calls[0]![0]);
+    expect(line).not.toContain(GHP_TOKEN);
+    expect(line).not.toContain(N8N_KEY);
+    expect(line).toContain("[REDACTED]");
+  });
 });
 
 describe("runWithCliErrors", () => {
@@ -129,6 +144,50 @@ describe("runWithCliErrors", () => {
 
     expect(outcome).toEqual({ ok: false, exitCode: 3 });
     expect(err).toHaveBeenCalledWith("custom:ConfigError");
+  });
+
+  it("kit-redacts custom formatError output", async () => {
+    const err = vi.fn();
+    const error = new ConfigError({
+      message: `Bearer leak-token-in-message and X-N8N-API-KEY: ${N8N_KEY}`,
+    });
+    const outcome = await runWithCliErrors(Effect.fail(error), {
+      err,
+      formatError: (e) => `custom:${e.message}`,
+    });
+
+    expect(outcome).toEqual({ ok: false, exitCode: 1 });
+    const line = String(err.mock.calls[0]![0]);
+    expect(line).toContain("custom:");
+    expect(line).not.toContain("leak-token-in-message");
+    expect(line).not.toContain(N8N_KEY);
+    expect(line).toContain("[REDACTED]");
+  });
+
+  it("identity redact opts out of kit redaction", async () => {
+    const err = vi.fn();
+    const error = new ConfigError({ message: "Bearer keep-me-raw" });
+    await runWithCliErrors(Effect.fail(error), {
+      err,
+      formatError: (e) => `custom:${e.message}`,
+      redact: (s) => s,
+    });
+
+    expect(err).toHaveBeenCalledWith("custom:Bearer keep-me-raw");
+  });
+
+  it("redacts OperatorError message secrets on stderr", async () => {
+    const err = vi.fn();
+    const error = new ConfigError({
+      message: `failed https://${GHP_TOKEN}@github.com with X-N8N-API-KEY: ${N8N_KEY}`,
+    });
+    const outcome = await runWithCliErrors(Effect.fail(error), { err });
+
+    expect(outcome).toEqual({ ok: false, exitCode: 1 });
+    const line = String(err.mock.calls[0]![0]);
+    expect(line).not.toContain(GHP_TOKEN);
+    expect(line).not.toContain(N8N_KEY);
+    expect(line).toContain("[REDACTED]");
   });
 
   it("redacts bearer tokens from defect messages on stderr", async () => {

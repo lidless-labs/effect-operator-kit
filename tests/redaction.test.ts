@@ -9,6 +9,10 @@ import {
 const SAMPLE_JWT =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signaturepart";
 
+/** GitHub-style PAT prefix (fixture only; not a real credential). */
+const GHP_TOKEN = "ghp_abcdefghijklmnop";
+const N8N_KEY = "n8n-secret-key-value";
+
 describe("redactString — identity and purity", () => {
   it("leaves plain text under 500 chars unchanged", () => {
     const msg = "connection refused to host.example:443";
@@ -61,7 +65,7 @@ describe("redactString — URL credentials", () => {
     const raw = "failed fetch https://alice:s3cret@api.example.com/v1/items";
     const out = redactString(raw);
     expect(out).toContain("https://");
-    expect(out).toContain("[REDACTED]:[REDACTED]@");
+    expect(out).toContain("[REDACTED]@");
     expect(out).toContain("api.example.com/v1/items");
     expect(out).not.toContain("alice");
     expect(out).not.toContain("s3cret");
@@ -70,8 +74,16 @@ describe("redactString — URL credentials", () => {
   it("redacts userinfo in http URLs", () => {
     const raw = "proxy http://user:pass@localhost:8080/path";
     const out = redactString(raw);
-    expect(out).toContain("[REDACTED]:[REDACTED]@");
+    expect(out).toContain("[REDACTED]@");
     expect(out).not.toContain("user:pass");
+  });
+
+  it("redacts username-only URL userinfo (token-as-username)", () => {
+    const raw = `failed fetch https://${GHP_TOKEN}@github.com/api`;
+    const out = redactString(raw);
+    expect(out).toContain("https://[REDACTED]@");
+    expect(out).toContain("github.com/api");
+    expect(out).not.toContain(GHP_TOKEN);
   });
 });
 
@@ -99,6 +111,62 @@ describe("redactString — query-param secrets", () => {
     expect(out).not.toContain("dash-val");
     expect(out).not.toContain("compact");
     expect(out).toContain("[REDACTED]");
+  });
+
+  it("redacts OAuth-style query params", () => {
+    const raw =
+      "GET /oauth?access_token=at123&refresh_token=rt456&client_secret=cs789&id_token=id000&x-api-key=n8nkey&safe=ok";
+    const out = redactString(raw);
+    expect(out).not.toContain("at123");
+    expect(out).not.toContain("rt456");
+    expect(out).not.toContain("cs789");
+    expect(out).not.toContain("id000");
+    expect(out).not.toContain("n8nkey");
+    expect(out).toContain("access_token=[REDACTED]");
+    expect(out).toContain("refresh_token=[REDACTED]");
+    expect(out).toContain("client_secret=[REDACTED]");
+    expect(out).toContain("id_token=[REDACTED]");
+    expect(out).toContain("x-api-key=[REDACTED]");
+    expect(out).toContain("safe=ok");
+  });
+
+  it("redacts generic *_token and *_secret suffix query params", () => {
+    const raw = "url?session_token=sess99&webhook_secret=whsec88&plain=visible";
+    const out = redactString(raw);
+    expect(out).not.toContain("sess99");
+    expect(out).not.toContain("whsec88");
+    expect(out).toContain("session_token=[REDACTED]");
+    expect(out).toContain("webhook_secret=[REDACTED]");
+    expect(out).toContain("plain=visible");
+  });
+});
+
+describe("redactString — consumer API headers", () => {
+  it("redacts X-N8N-API-KEY, x-auth-token, X-Emby-Token, and X-Api-Key values", () => {
+    const raw = [
+      `X-N8N-API-KEY: ${N8N_KEY}`,
+      "x-auth-token: librenms-token-value",
+      "X-Emby-Token: emby-secret",
+      "X-Api-Key: generic-api-key",
+    ].join("\n");
+    const out = redactString(raw);
+    expect(out).toContain("X-N8N-API-KEY:");
+    expect(out).toContain("x-auth-token:");
+    expect(out).toContain("X-Emby-Token:");
+    expect(out).toContain("X-Api-Key:");
+    expect(out).not.toContain(N8N_KEY);
+    expect(out).not.toContain("librenms-token-value");
+    expect(out).not.toContain("emby-secret");
+    expect(out).not.toContain("generic-api-key");
+    expect(out).toContain("[REDACTED]");
+  });
+
+  it("redacts non-Bearer Authorization header values", () => {
+    const raw = "Authorization: Token abc123secret";
+    const out = redactString(raw);
+    expect(out.toLowerCase()).toContain("authorization:");
+    expect(out).toContain("[REDACTED]");
+    expect(out).not.toContain("abc123secret");
   });
 });
 

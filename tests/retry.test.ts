@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Effect } from "effect";
 import {
   AuthError,
@@ -308,6 +308,35 @@ describe("withRetry Effect Schedule behavior", () => {
     });
     await runEither(withRetry(failingEffect(attempts, transportErr), policy));
     expect(attempts.count).toBe(1);
+  });
+
+  it("jitter stays within maxDelayMs hard cap", async () => {
+    const delays: number[] = [];
+    const originalSetTimeout = globalThis.setTimeout;
+    const setTimeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((fn, delay, ...args) => {
+        if (typeof delay === "number" && delay > 0) {
+          delays.push(delay);
+        }
+        return originalSetTimeout(fn as () => void, 0, ...args);
+      });
+
+    try {
+      const attempts = { count: 0 };
+      const policy = exponentialRetry({
+        maxAttempts: 20,
+        initialDelayMs: 50,
+        maxDelayMs: 50,
+        factor: 2,
+        jitter: true,
+      });
+      await runEither(withRetry(failingEffect(attempts, transportErr), policy));
+      expect(delays.length).toBeGreaterThan(0);
+      expect(Math.max(...delays)).toBeLessThanOrEqual(55);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
   });
 
   it("preserves success values without retry", async () => {

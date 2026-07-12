@@ -14,6 +14,9 @@ import {
 } from "../src/errors.js";
 import { fail, ok, type McpTextResult } from "../src/result.js";
 
+const GHP_TOKEN = "ghp_abcdefghijklmnop";
+const N8N_KEY = "n8n-secret-key-value";
+
 function parseText(result: McpTextResult): Record<string, unknown> {
   return JSON.parse(result.content[0]!.text) as Record<string, unknown>;
 }
@@ -124,6 +127,19 @@ describe("toMcpResult / runAsMcpTool", () => {
     await expect(runAsMcpTool(Effect.fail(error))).resolves.toMatchObject({
       isError: true,
     });
+  });
+
+  it("never leaks ghp_ URL tokens or X-N8N-API-KEY header values in fail output", async () => {
+    const error = new ConfigError({
+      message: `failed https://${GHP_TOKEN}@github.com with X-N8N-API-KEY: ${N8N_KEY}`,
+    });
+    const result = await runAsMcpTool(Effect.fail(error));
+
+    expect(result.isError).toBe(true);
+    const message = String(parseText(result).error);
+    expect(message).not.toContain(GHP_TOKEN);
+    expect(message).not.toContain(N8N_KEY);
+    expect(message).toContain("[REDACTED]");
   });
 });
 

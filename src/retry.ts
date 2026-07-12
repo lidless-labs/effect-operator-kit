@@ -58,17 +58,19 @@ export const exponentialRetry = (opts: Partial<RetryPolicy>): RetryPolicy => ({
 });
 
 const buildSchedule = (policy: RetryPolicy): Schedule.Schedule<Duration.Duration, OperatorError> => {
-  const base = Schedule.exponential(`${policy.initialDelayMs} millis`, policy.factor).pipe(
+  const base = Schedule.exponential(`${policy.initialDelayMs} millis`, policy.factor);
+
+  const withJitter = policy.jitter ? base.pipe(Schedule.jittered) : base;
+
+  const capped = withJitter.pipe(
     Schedule.modifyDelay((_out, duration) => {
       const ms = Duration.toMillis(duration);
       return ms > policy.maxDelayMs ? `${policy.maxDelayMs} millis` : duration;
     }),
   );
 
-  const withJitter = policy.jitter ? base.pipe(Schedule.jittered) : base;
-
   // Schedule input is the failure value; stop when shouldRetry is false.
-  return withJitter.pipe(Schedule.whileInput((error: OperatorError) => policy.shouldRetry(error)));
+  return capped.pipe(Schedule.whileInput((error: OperatorError) => policy.shouldRetry(error)));
 };
 
 /**

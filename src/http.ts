@@ -238,7 +238,15 @@ export const buildUrl = (
   path: string,
   query?: HttpRequest["query"],
 ): URL => {
+  if (path.includes("\\")) {
+    throw new TypeError("buildUrl: path must not contain backslash");
+  }
+
   const url = new URL(path, baseUrl);
+
+  if (url.username || url.password) {
+    throw new TypeError("buildUrl: path must not contain URL userinfo");
+  }
 
   if (url.origin !== baseUrl.origin) {
     throw new TypeError(

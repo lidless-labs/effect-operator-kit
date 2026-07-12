@@ -100,6 +100,20 @@ describe("buildUrl", () => {
     expect(url.origin).toBe(baseUrl.origin);
     expect(url.href).toBe("https://api.example.com/v1/users/1");
   });
+
+  it("rejects paths containing backslash", () => {
+    expect(() => buildUrl(baseUrl, "users\\evil")).toThrow(TypeError);
+    expect(() => buildUrl(baseUrl, "users\\evil")).toThrow(/backslash/i);
+  });
+
+  it("rejects same-origin absolute URLs with userinfo", () => {
+    expect(() =>
+      buildUrl(baseUrl, "https://ghp_xxx@api.example.com/steal"),
+    ).toThrow(TypeError);
+    expect(() =>
+      buildUrl(baseUrl, "https://ghp_xxx@api.example.com/steal"),
+    ).toThrow(/userinfo/i);
+  });
 });
 
 describe("sendRequest", () => {

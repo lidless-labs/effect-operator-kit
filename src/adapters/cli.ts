@@ -40,7 +40,7 @@ export const writeOperatorError = (
   error: OperatorError,
   err: StderrWriter,
 ): void => {
-  err(formatOperatorError(error));
+  err(defaultRedact(formatOperatorError(error)));
 };
 
 export const runWithCliErrors = async <A>(
@@ -59,13 +59,13 @@ export const runWithCliErrors = async <A>(
       const squashed = Cause.squash(cause);
       const format = deps.formatError ?? formatOperatorError;
       const codeFor = deps.exitCodeFor ?? exitCodeForOperatorError;
+      const redact = deps.redact ?? defaultRedact;
 
       if (isOperatorError(squashed)) {
-        deps.err(format(squashed));
+        deps.err(redact(format(squashed)));
         return { ok: false as const, exitCode: codeFor(squashed) };
       }
 
-      const redact = deps.redact ?? defaultRedact;
       const message =
         squashed instanceof Error
           ? squashed.message
