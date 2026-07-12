@@ -1,3 +1,6 @@
 node_modules/
 dist/
 .graphtrail/
+.brigade/runs/
+.brigade/work/
+memory/
