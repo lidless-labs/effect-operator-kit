@@ -1,3 +1,8 @@
+// Fabricated secrets below are redaction fixtures: the suite exists to prove
+// they never survive to output. None are real credentials.
+// content-guard: allow secret/bearer-token file
+// content-guard: allow secret/jwt-token file
+// content-guard: allow pii/email file
 import { describe, expect, it } from "vitest";
 import {
   defaultRedact,

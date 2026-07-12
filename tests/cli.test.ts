@@ -1,3 +1,5 @@
+// Fabricated bearer token below is a redaction fixture, not a credential.
+// content-guard: allow secret/bearer-token file
 import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
 import {
