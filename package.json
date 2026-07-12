@@ -12,7 +12,9 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts --clean && tsc -p tsconfig.build.json",
     "test": "vitest run",
@@ -22,8 +24,9 @@
     "effect": "^3.21.4"
   },
   "devDependencies": {
-    "typescript": "^7.0.2",
+    "@types/node": "^26.1.1",
     "tsup": "^8.4.0",
+    "typescript": "^7.0.2",
     "vitest": "^4.1.5"
   }
 }
