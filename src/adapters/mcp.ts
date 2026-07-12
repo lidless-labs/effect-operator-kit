@@ -1,5 +1,6 @@
 import { Cause, Effect } from "effect";
 import type { OperatorError } from "../errors.js";
+import { defaultRedact, type RedactFn } from "../redaction.js";
 import { fail, type McpTextResult } from "../result.js";
 
 type TaggedShape = {
@@ -81,28 +82,31 @@ function formatTaggedThin(error: {
 /** Convert an Effect with OperatorError (or defects) into always-succeeding McpTextResult. */
 export const toMcpResult = (
   effect: Effect.Effect<McpTextResult, OperatorError>,
+  redact: RedactFn = defaultRedact,
 ): Effect.Effect<McpTextResult, never> =>
   Effect.either(Effect.sandbox(effect)).pipe(
     Effect.map((result) =>
       result._tag === "Left"
-        ? fail(operatorErrorMessage(Cause.squash(result.left)))
+        ? fail(redact(operatorErrorMessage(Cause.squash(result.left))))
         : result.right,
     ),
   );
 
 export const runAsMcpTool = (
   effect: Effect.Effect<McpTextResult, OperatorError>,
-): Promise<McpTextResult> => Effect.runPromise(toMcpResult(effect));
+  redact: RedactFn = defaultRedact,
+): Promise<McpTextResult> => Effect.runPromise(toMcpResult(effect, redact));
 
 export const toToolHandler =
   <Args>(
     handler: (args: Args) => Effect.Effect<McpTextResult, OperatorError>,
+    redact: RedactFn = defaultRedact,
   ): ((args: Args) => Promise<McpTextResult>) =>
   (args) => {
     try {
-      return runAsMcpTool(handler(args));
+      return runAsMcpTool(handler(args), redact);
     } catch (error) {
-      return Promise.resolve(fail(operatorErrorMessage(error)));
+      return Promise.resolve(fail(redact(operatorErrorMessage(error))));
     }
   };
 

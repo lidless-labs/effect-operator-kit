@@ -102,6 +102,19 @@ describe("toMcpResult / runAsMcpTool", () => {
     expect(String(parseText(result).error)).toContain("unexpected defect");
   });
 
+  it("redacts bearer tokens from defect messages in fail() output", async () => {
+    const result = await runAsMcpTool(
+      Effect.die(
+        new Error("upstream Bearer mcp-leak-token while processing"),
+      ) as Effect.Effect<McpTextResult, never>,
+    );
+
+    expect(result.isError).toBe(true);
+    const message = String(parseText(result).error);
+    expect(message).not.toContain("mcp-leak-token");
+    expect(message).toContain("[REDACTED]");
+  });
+
   it("never rejects the promise on OperatorError", async () => {
     const error = new TimeoutError({
       method: "GET",
@@ -145,6 +158,18 @@ describe("toToolHandler", () => {
     const result = await handler({});
     expect(result.isError).toBe(true);
     expect(String(parseText(result).error)).toContain("sync setup failed");
+  });
+
+  it("redacts bearer tokens from sync-throw messages in fail() output", async () => {
+    const handler = toToolHandler(() => {
+      throw new Error("sync Bearer sync-throw-token leaked");
+    });
+
+    const result = await handler({});
+    expect(result.isError).toBe(true);
+    const message = String(parseText(result).error);
+    expect(message).not.toContain("sync-throw-token");
+    expect(message).toContain("[REDACTED]");
   });
 
   it("never rejects on defect inside handler Effect", async () => {

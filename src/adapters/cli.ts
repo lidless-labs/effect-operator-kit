@@ -1,5 +1,6 @@
 import { Cause, Effect, Exit } from "effect";
 import type { OperatorError } from "../errors.js";
+import { defaultRedact, type RedactFn } from "../redaction.js";
 
 export type StderrWriter = (line: string) => void;
 
@@ -48,6 +49,7 @@ export const runWithCliErrors = async <A>(
     err: StderrWriter;
     formatError?: (e: OperatorError) => string;
     exitCodeFor?: (e: OperatorError) => number;
+    redact?: RedactFn;
   },
 ): Promise<{ ok: true; value: A } | { ok: false; exitCode: number }> => {
   const exit = await Effect.runPromiseExit(effect);
@@ -63,11 +65,12 @@ export const runWithCliErrors = async <A>(
         return { ok: false as const, exitCode: codeFor(squashed) };
       }
 
+      const redact = deps.redact ?? defaultRedact;
       const message =
         squashed instanceof Error
           ? squashed.message
           : String(squashed ?? "Unknown error");
-      deps.err(message);
+      deps.err(redact(message));
       return { ok: false as const, exitCode: 1 };
     },
   });

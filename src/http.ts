@@ -9,6 +9,7 @@ import {
   UnexpectedStatusError,
   type OperatorError,
 } from "./errors.js";
+import { defaultRedact } from "./redaction.js";
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD";
 export type QueryValue = string | number | boolean | null | undefined;
@@ -55,10 +56,8 @@ export interface HttpResponse<T = unknown> {
 
 const DEFAULT_SUCCESS_STATUSES = Array.from({ length: 100 }, (_, i) => 200 + i);
 
-const identity = (value: string) => value;
-
 function redactBody(text: string, redact?: (value: string) => string): string {
-  return (redact ?? identity)(text);
+  return (redact ?? defaultRedact)(text);
 }
 
 function mergeHeaders(...sources: (HeadersInit | undefined)[]): Headers {
@@ -240,6 +239,12 @@ export const buildUrl = (
   query?: HttpRequest["query"],
 ): URL => {
   const url = new URL(path, baseUrl);
+
+  if (url.origin !== baseUrl.origin) {
+    throw new TypeError(
+      `buildUrl: path "${path}" resolves to a different origin (${url.origin}) than baseUrl (${baseUrl.origin})`,
+    );
+  }
 
   if (query) {
     for (const [key, value] of Object.entries(query)) {

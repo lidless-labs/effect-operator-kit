@@ -82,6 +82,24 @@ describe("buildUrl", () => {
     const url = buildUrl(baseUrl, "items", { tags: ["a", "b"] });
     expect(url.searchParams.getAll("tags")).toEqual(["a", "b"]);
   });
+
+  it("rejects absolute http(s) paths that would change origin", () => {
+    expect(() => buildUrl(baseUrl, "https://evil.com/steal")).toThrow(TypeError);
+    expect(() => buildUrl(baseUrl, "https://evil.com/steal")).toThrow(
+      /origin/i,
+    );
+  });
+
+  it("rejects protocol-relative paths that would change origin", () => {
+    expect(() => buildUrl(baseUrl, "//evil.com/steal")).toThrow(TypeError);
+    expect(() => buildUrl(baseUrl, "//evil.com/steal")).toThrow(/origin/i);
+  });
+
+  it("keeps normal relative paths on the base origin", () => {
+    const url = buildUrl(baseUrl, "users/1");
+    expect(url.origin).toBe(baseUrl.origin);
+    expect(url.href).toBe("https://api.example.com/v1/users/1");
+  });
 });
 
 describe("sendRequest", () => {
@@ -573,6 +591,26 @@ describe("sendRequest", () => {
   });
 
   describe("redaction hook", () => {
+    it("redacts bearer tokens in error bodies by default", async () => {
+      fetchMock.mockResolvedValueOnce(
+        new Response("Authorization: Bearer upstream-secret-token", {
+          status: 401,
+        }),
+      );
+
+      const error = await expectFailure(
+        sendRequest(makeCtx({ fetch: fetchMock }), {
+          method: "GET",
+          path: "secure",
+        }),
+      );
+
+      expect(error).toBeInstanceOf(AuthError);
+      const body = (error as AuthError).body;
+      expect(body).not.toContain("upstream-secret-token");
+      expect(body).toContain("[REDACTED]");
+    });
+
     it("applies ctx.redact to error bodies", async () => {
       fetchMock.mockResolvedValueOnce(
         new Response("secret-token leaked", { status: 500 }),

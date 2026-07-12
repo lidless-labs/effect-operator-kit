@@ -130,4 +130,20 @@ describe("runWithCliErrors", () => {
     expect(outcome).toEqual({ ok: false, exitCode: 3 });
     expect(err).toHaveBeenCalledWith("custom:ConfigError");
   });
+
+  it("redacts bearer tokens from defect messages on stderr", async () => {
+    const err = vi.fn();
+    const outcome = await runWithCliErrors(
+      Effect.die(
+        new Error("upstream said Authorization: Bearer leak-me-now"),
+      ) as Effect.Effect<number, never>,
+      { err },
+    );
+
+    expect(outcome).toEqual({ ok: false, exitCode: 1 });
+    expect(err).toHaveBeenCalledTimes(1);
+    const line = String(err.mock.calls[0]![0]);
+    expect(line).not.toContain("leak-me-now");
+    expect(line).toContain("[REDACTED]");
+  });
 });
