@@ -30,6 +30,12 @@ export const refuseUnconfirmed = (operation: string): McpTextResult =>
     `Refusing to ${operation} without explicit confirmation. Re-call this tool with confirm: true to proceed.`,
   );
 
+/**
+ * Wrap a partial batch payload as a successful MCP result.
+ * Caller-owned semantics: does not validate
+ * `requested === succeeded + failed + skipped`, and does not set `isError`.
+ * Repos decide when partial batch results are errors vs ok payloads.
+ */
 export const partialFailure = <T>(payload: {
   requested: number;
   attempted: number;

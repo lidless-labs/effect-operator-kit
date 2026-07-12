@@ -150,6 +150,37 @@ export const partialFailure: <T>(payload: {
 }) => McpTextResult;
 ```
 
+```ts
+// redaction.ts
+export type RedactFn = (value: string) => string;
+export const redactString: (message: string, secrets?: string[]) => string;
+export const defaultRedact: RedactFn;
+```
+
+```ts
+// adapters/cli.ts
+export type StderrWriter = (line: string) => void;
+export const formatOperatorError: (error: OperatorError) => string;
+export const exitCodeForOperatorError: (error: OperatorError) => number;
+export const writeOperatorError: (error: OperatorError, err: StderrWriter) => void;
+export const runWithCliErrors: <A>(effect: Effect.Effect<A, OperatorError>, deps: {
+  err: StderrWriter;
+  formatError?: (e: OperatorError) => string;
+  exitCodeFor?: (e: OperatorError) => number;
+  redact?: RedactFn;
+}) => Promise<{ ok: true; value: A } | { ok: false; exitCode: number }>;
+```
+
+```ts
+// adapters/mcp.ts
+export const operatorErrorMessage: (error: unknown) => string;
+export const toMcpResult: (effect: Effect.Effect<McpTextResult, OperatorError>, redact?: RedactFn) => Effect.Effect<McpTextResult, never>;
+export const runAsMcpTool: (effect: Effect.Effect<McpTextResult, OperatorError>, redact?: RedactFn) => Promise<McpTextResult>;
+export const toToolHandler: <Args>(handler: (args: Args) => Effect.Effect<McpTextResult, OperatorError>, redact?: RedactFn) => (args: Args) => Promise<McpTextResult>;
+```
+
+CLI and MCP adapters redact formatted error output by default; callers opt out by supplying an identity `redact` hook.
+
 **Keep Out Of The Kit**
 
 These must stay repo-owned or injectable:
