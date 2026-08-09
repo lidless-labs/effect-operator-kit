@@ -242,7 +242,15 @@ export const buildUrl = (
     throw new TypeError("buildUrl: path must not contain backslash");
   }
 
-  const url = new URL(path, baseUrl);
+  // Treat baseUrl as a directory base so relative paths append under any
+  // path prefix. WHATWG resolution otherwise replaces the final segment when
+  // the base pathname lacks a trailing slash (e.g. normalizeBaseUrl output).
+  const directoryBase = new URL(baseUrl.href);
+  if (!directoryBase.pathname.endsWith("/")) {
+    directoryBase.pathname += "/";
+  }
+
+  const url = new URL(path, directoryBase);
 
   if (url.username || url.password) {
     throw new TypeError("buildUrl: path must not contain URL userinfo");
