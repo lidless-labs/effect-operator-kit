@@ -8,6 +8,7 @@ import {
   type HttpContext,
   type HttpRequest,
 } from "../src/http.js";
+import { normalizeBaseUrl } from "../src/config.js";
 import {
   AuthError,
   ForbiddenError,
@@ -115,6 +116,35 @@ describe("buildUrl", () => {
     expect(() =>
       buildUrl(baseUrl, "https://ghp_xxx@api.example.com/steal"),
     ).toThrow(/userinfo/i);
+  });
+
+  it("preserves normalizeBaseUrl path prefixes as directory bases", () => {
+    const nested = normalizeBaseUrl("https://api.example.com/v1/");
+    expect(buildUrl(nested, "users").href).toBe(
+      "https://api.example.com/v1/users",
+    );
+
+    const nestedNoSlash = normalizeBaseUrl("https://api.example.com/v1");
+    expect(buildUrl(nestedNoSlash, "users").href).toBe(
+      "https://api.example.com/v1/users",
+    );
+
+    const root = normalizeBaseUrl("https://api.example.com/");
+    expect(buildUrl(root, "users").href).toBe("https://api.example.com/users");
+
+    const nestedWithSlashInput = normalizeBaseUrl(
+      "https://api.example.com/v1/",
+      { stripTrailingSlash: false },
+    );
+    expect(buildUrl(nestedWithSlashInput, "users").href).toBe(
+      "https://api.example.com/v1/users",
+    );
+
+    const sameOriginAbsolute = buildUrl(
+      nested,
+      "https://api.example.com/v1/other",
+    );
+    expect(sameOriginAbsolute.href).toBe("https://api.example.com/v1/other");
   });
 });
 
