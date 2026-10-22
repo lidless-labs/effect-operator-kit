@@ -10,6 +10,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./streamable-http": {
+      "types": "./dist/streamable-http.d.ts",
+      "import": "./dist/streamable-http.js"
     }
   },
   "files": [
@@ -21,19 +25,26 @@
     "typecheck": "tsc --noEmit",
     "prepare": "npm run build"
   },
-  "dependencies": {},
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "@types/node": "^26.1.1",
+    "effect": "^3.21.4",
     "tsup": "^8.4.0",
     "typescript": "^7.0.2",
     "vitest": "^4.1.5",
-    "effect": "^3.21.4"
+    "zod": "^4.6.7"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/lidless-labs/effect-operator-kit.git"
   },
   "peerDependencies": {
-    "effect": "^3.21.4"
+    "effect": "^3.21.4",
+    "@modelcontextprotocol/sdk": "^1.32.1"
+  },
+  "peerDependenciesMeta": {
+    "@modelcontextprotocol/sdk": {
+      "optional": true
+    }
   }
 }

@@ -28,3 +28,21 @@ configureResults({ maxBytes: 60_000, legacyDetails: true });
 ```
 
 The non-standard `details` field is no longer emitted. Set `legacyDetails: true` (process-wide or per call) while consumers still read it.
+
+## Streamable HTTP server
+
+`@lidless-labs/effect-operator-kit/streamable-http` replaces the per-repo copies of the HTTP transport. It needs `@modelcontextprotocol/sdk` (an optional peer dependency, so the main entry point does not load it).
+
+```ts
+import { runStreamableHttpServer } from "@lidless-labs/effect-operator-kit/streamable-http";
+
+await runStreamableHttpServer({
+  name: "example-mcp",
+  envPrefix: "EXAMPLE_MCP_HTTP", // EXAMPLE_MCP_HTTP_TOKEN, _HOST, _PORT, _ALLOWED_HOSTS, _ALLOWED_ORIGINS
+  defaultPort: 3120,
+  createServer: () => createExampleMcpServer(config),
+  distinctFrom: [config.apiKey],
+});
+```
+
+It binds loopback by default and refuses a wildcard bind. A bearer token (32 characters or more, constant-time compare) is required on any non-loopback bind and enforced whenever one is set. Host and Origin are checked against loopback, the bound address and the explicit `allowedHosts` / `allowedOrigins` lists (a guard against cross-site requests; the server sends no CORS headers and does not answer preflight, so it is for non-browser MCP clients), bodies are capped at 1 MiB, and sessions are capped (128) and reaped when idle (30 minutes). Pass `stateless: true` for one server per request with no sessions.
