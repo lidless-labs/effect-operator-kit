@@ -163,6 +163,27 @@ describe("boundResult", () => {
     expect(boundResult(result, 2048)).toBe(result);
   });
 
+  it("measures the serialized text, so escaped characters count at their wire size", () => {
+    const payload = { x: "\\".repeat(20_000) };
+    const result = make(JSON.stringify(payload), { structuredContent: payload });
+    // About 80 KB decoded, but the text block is escaped again on the wire.
+    expect(utf8ByteLength(JSON.stringify(result))).toBeGreaterThan(90_000);
+    const bounded = boundResult(result, 90_000);
+    expect(bounded.structuredContent).toMatchObject({ truncated: true });
+    expect(utf8ByteLength(JSON.stringify(bounded))).toBeLessThanOrEqual(90_000);
+  });
+
+  it("keeps the serialized replacement within the cap for quote, newline and emoji heavy text", () => {
+    const text = '"\n\t\\\u0001\u{1f600}é'.repeat(2000);
+    const result = make(text, { isError: true });
+    for (const cap of [1024, 2048, 10_000]) {
+      const bounded = boundResult(result, cap);
+      expect(utf8ByteLength(JSON.stringify(bounded)), `cap ${cap}`).toBeLessThanOrEqual(cap);
+      expect(bounded.isError).toBe(true);
+      expect(bounded.content[0]!.text).toContain("[truncated:");
+    }
+  });
+
   it("does not mutate its input", () => {
     const result = make("i".repeat(5000), { details: { x: 1 } });
     boundResult(result, 2048);

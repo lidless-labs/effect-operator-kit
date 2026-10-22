@@ -55,19 +55,9 @@ export interface BoundedText {
 export const truncationMarker = (originalBytes: number, maxBytes: number): string =>
   `\n[truncated: output was ${originalBytes} bytes, limit is ${maxBytes} bytes. Narrow the request with filters, a smaller limit or an offset to see the rest.]`;
 
-/**
- * Cut `text` to fit `budget` bytes, marker included. The marker reports `cap`,
- * the limit the caller configured, which can be larger than `budget` when part
- * of the cap is reserved for other fields of the result.
- */
-const cutWithMarker = (
-  text: string,
-  originalBytes: number,
-  cap: number,
-  budget: number = cap,
-): string => {
+const cutWithMarker = (text: string, originalBytes: number, cap: number): string => {
   const marker = truncationMarker(originalBytes, cap);
-  return truncateUtf8(text, budget - utf8ByteLength(marker)) + marker;
+  return truncateUtf8(text, cap - utf8ByteLength(marker)) + marker;
 };
 
 /**
@@ -96,34 +86,70 @@ export const boundText = (
 const serializedBytes = (value: unknown): number =>
   value === undefined ? 0 : utf8ByteLength(JSON.stringify(value) ?? "");
 
-/** Serialized size of the replacement `structuredContent`, with the widest possible counts. */
-const truncatedMetadataBytes = (originalBytes: number, cap: number): number =>
-  serializedBytes({ truncated: true, originalBytes, returnedBytes: cap, maxBytes: cap });
+/** UTF-8 bytes `character` takes inside a JSON string literal, escapes included. */
+const encodedBytes = (character: string): number => {
+  const code = character.codePointAt(0)!;
+  if (code === 0x22 || code === 0x5c) return 2;
+  if (code < 0x20) return code === 8 || code === 9 || code === 10 || code === 12 || code === 13 ? 2 : 6;
+  // A lone surrogate is written as a \uXXXX escape by JSON.stringify.
+  if (code >= 0xd800 && code <= 0xdfff) return 6;
+  if (code < 0x80) return 1;
+  if (code < 0x800) return 2;
+  return code < 0x10000 ? 3 : 4;
+};
+
+const encodedTextBytes = (text: string): number => {
+  let total = 0;
+  for (const character of text) total += encodedBytes(character);
+  return total;
+};
 
 /**
- * Bound a result by UTF-8 bytes. The size is what goes on the wire: the text
- * blocks together plus the serialized `structuredContent` and `details`, since
- * a plain-object payload is carried in both text and `structuredContent`. A
- * result within the cap is returned as is. Over the cap, the text is cut with a
- * marker, `structuredContent` becomes
+ * Longest prefix of `text` whose JSON string encoding fits `budget` bytes. A
+ * block's text is escaped again when the result is serialized, so the decoded
+ * length undercounts quote, backslash and control heavy output.
+ */
+const truncateEncoded = (text: string, budget: number): string => {
+  let used = 0;
+  let end = 0;
+  for (const character of text) {
+    used += encodedBytes(character);
+    if (used > budget) break;
+    end += character.length;
+  }
+  return text.slice(0, end);
+};
+
+/**
+ * Bound a result by UTF-8 bytes of its serialized form. The size is what goes on
+ * the wire: the whole result as JSON, so a plain-object payload counts once in the
+ * text block (escaped again) and once in `structuredContent`, and `details` counts
+ * when present. A result within the cap is returned as is. Over the cap, the text
+ * is cut with a marker, `structuredContent` becomes
  * `{ truncated: true, originalBytes, returnedBytes, maxBytes }`, and the legacy
  * `details` field is dropped, since either would otherwise repeat the full
- * payload. The text and the replacement metadata together fit in the cap.
+ * payload. The serialized replacement fits in the cap.
  */
 export const boundResult = <R extends BoundableResult>(
   result: R,
   maxBytes: number = DEFAULT_MAX_OUTPUT_BYTES,
 ): R => {
   const cap = resolveMaxOutputBytes(maxBytes);
-  const joined = result.content.map((block) => block.text).join("\n");
-  const originalBytes =
-    utf8ByteLength(joined) +
-    serializedBytes(result.structuredContent) +
-    serializedBytes(result.details);
+  const originalBytes = serializedBytes(result);
   if (originalBytes <= cap) return result;
 
-  const text = cutWithMarker(joined, originalBytes, cap, cap - truncatedMetadataBytes(originalBytes, cap));
+  const joined = result.content.map((block) => block.text).join("\n");
   const { details: _details, ...rest } = result;
+  const widest = { truncated: true, originalBytes, returnedBytes: cap, maxBytes: cap };
+  // Everything in the replacement except the text itself, with the widest counts.
+  const fixed = serializedBytes({
+    ...rest,
+    content: [{ type: "text", text: "" }],
+    structuredContent: widest,
+  });
+  const marker = truncationMarker(originalBytes, cap);
+  const budget = cap - fixed - encodedTextBytes(marker);
+  const text = truncateEncoded(joined, Math.max(0, budget)) + marker;
   return {
     ...rest,
     content: [{ type: "text", text }],

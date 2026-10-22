@@ -40,6 +40,16 @@ describe("ok", () => {
     expect("details" in ok(payload, { legacyDetails: false })).toBe(false);
   });
 
+  it("gives non-plain objects text only, since they do not serialize to a record", () => {
+    class Item {
+      id = 1;
+    }
+    for (const value of [new Date(0), new Map(), new Item()]) {
+      expect(ok(value).structuredContent).toBeUndefined();
+    }
+    expect(ok(Object.create(null)).structuredContent).toEqual({});
+  });
+
   it("gives arrays and primitives text only, since structuredContent must be an object", () => {
     for (const value of ["hello", [1, 2], 7, null]) {
       const result = ok(value);

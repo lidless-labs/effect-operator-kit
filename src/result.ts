@@ -50,8 +50,13 @@ export const resetResultDefaults = (): void => {
   defaults = { maxBytes: DEFAULT_MAX_OUTPUT_BYTES, legacyDetails: false };
 };
 
-const isPlainObject = (value: unknown): value is Record<string, unknown> =>
-  value !== null && typeof value === "object" && !Array.isArray(value);
+// A Date, Map or class instance serializes to something other than a record, so only
+// object literals and null-prototype objects may become structuredContent.
+const isPlainObject = (value: unknown): value is Record<string, unknown> => {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+};
 
 const toText = (value: unknown, pretty: boolean | undefined): string =>
   (pretty ? JSON.stringify(value, null, 2) : JSON.stringify(value)) ?? "null";
