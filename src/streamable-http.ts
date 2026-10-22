@@ -547,13 +547,23 @@ export const createStreamableHttpServer = async (
     let session = typeof id === "string" ? sessions.get(id) : undefined;
     if (id !== undefined && !session) return sendJson(response, 404, { error: "Session not found" });
     let created = false;
+    // Set when the client drops before its initialize response is finished, including while
+    // createServer() or connect() is still pending. Nobody holds the new session id then.
+    let abandoned = false;
     if (!session) {
       if (request.method !== "POST" || !isInitializeRequest(body)) {
         return sendJson(response, 400, { error: "Initialize a session first" });
       }
+      response.once("close", () => {
+        if (!response.writableFinished) abandoned = true;
+      });
       session = await openWithinCap();
       if (!session) return unavailable(response);
       created = true;
+      if (abandoned) {
+        await dispose(session);
+        return;
+      }
     }
     session.lastUsed = Date.now();
     const activeCall = request.method === "POST";
@@ -572,7 +582,7 @@ export const createStreamableHttpServer = async (
     } finally {
       if (activeCall) session.active -= 1;
       session.lastUsed = Date.now();
-      if (created && !session.transport.sessionId) await dispose(session);
+      if (created && (abandoned || !session.transport.sessionId)) await dispose(session);
     }
   };
 

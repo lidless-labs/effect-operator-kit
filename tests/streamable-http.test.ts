@@ -860,6 +860,44 @@ describe("sessions", () => {
     expect(allowed.status).toBe(200);
   });
 
+  it("disposes a stateful session when the client drops while it is starting", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered!: () => void;
+    const factoryEntered = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let disposed = 0;
+    const handle = await start({
+      maxSessions: 1,
+      createServer: async () => {
+        entered();
+        await gate;
+        return { server: makeServer(), dispose: () => void (disposed += 1) };
+      },
+    });
+    const req = httpRequest({
+      host: "127.0.0.1",
+      port: handle.port,
+      method: "POST",
+      path: "/mcp",
+      headers: jsonHeaders,
+    });
+    req.on("error", () => undefined);
+    req.end(initializeBody);
+    await factoryEntered;
+    req.destroy();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(disposed).toBe(1);
+    // The slot is free again.
+    const next = await raw(handle, { method: "POST", headers: jsonHeaders, body: initializeBody });
+    expect(next.status).toBe(200);
+  });
+
   it("disposes a stateless server when the client drops while it is starting", async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
