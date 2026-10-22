@@ -4,6 +4,18 @@ Shared Effect plumbing for the lidless operator CLIs (adguardctrl, immichctrl, j
 
 Design and API contract: [docs/design.md](docs/design.md). Service behavior stays in each ctrl repo; this package owns only the duplicated skeleton.
 
+## Tool annotations
+
+`annotate`, the tier presets (`READ_ONLY`, `ADDITIVE`, `UPDATE`, `DESTRUCTIVE`), `assertNoDrift` and `assertToolAnnotations` give every MCP tool explicit hints. Anything not declared read-only is `destructiveHint: true` unless the app opts out per tool, because Executor v2 prompts only on `destructiveHint === true`.
+
+```ts
+import { annotate, READ_ONLY } from "@lidless-labs/effect-operator-kit";
+
+server.tool("items_list", "List items", schema, READ_ONLY, handler);
+server.tool("items_create", "Create an item", schema, annotate({ destructive: false }), handler);
+server.tool("items_delete", "Delete an item", schema, annotate(), handler);
+```
+
 ## Bounded, structured results
 
 `ok()` and `fail()` emit compact JSON text plus `structuredContent` (for object payloads) and cap the result at 90,000 UTF-8 bytes by default, under Executor v2's 100,000 byte limit. The cap is measured on the serialized result, so the text block (escaped again as JSON), `structuredContent` and any legacy `details` all count, and an object payload that appears in both text and `structuredContent` counts twice. An oversize result is cut with a `[truncated: ...]` marker and `structuredContent` becomes `{ truncated: true, originalBytes, returnedBytes, maxBytes }`. `toMcpResult`, `runAsMcpTool` and `toToolHandler` apply the same cap to results an app built by hand.
