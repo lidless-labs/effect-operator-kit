@@ -2,8 +2,9 @@
 // content-guard: allow secret/bearer-token file
 import { lookup } from "node:dns/promises";
 import { request as httpRequest } from "node:http";
-import { hostname as osHostname } from "node:os";
-import { afterEach, describe, expect, it } from "vitest";
+import dns from "node:dns";
+import { hostname as osHostname, networkInterfaces } from "node:os";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -134,6 +135,30 @@ describe("configuration", () => {
       body: initializeBody,
     });
     expect(res.status).toBe(200);
+  });
+
+  it("requires a token when a loopback name resolves to a non-loopback address", async () => {
+    const external = Object.values(networkInterfaces())
+      .flat()
+      .find((entry) => entry && entry.family === "IPv4" && !entry.internal);
+    if (!external) return; // no external interface on this machine
+    const lookup = vi.spyOn(dns, "lookup").mockImplementation(((
+      _host: string,
+      options: unknown,
+      callback?: (error: Error | null, address: unknown, family?: number) => void,
+    ) => {
+      const done = (typeof options === "function" ? options : callback)!;
+      const all = typeof options === "object" && options !== null && (options as { all?: boolean }).all === true;
+      if (all) done(null, [{ address: external.address, family: 4 }]);
+      else done(null, external.address, 4);
+    }) as never);
+    try {
+      await expect(
+        createStreamableHttpServer({ createServer: makeServer, host: "localhost", port: 0 }),
+      ).rejects.toThrow(/not loopback; a token is required/);
+    } finally {
+      lookup.mockRestore();
+    }
   });
 
   it("refuses alternate spellings of the wildcard address after resolution", async () => {
@@ -785,6 +810,60 @@ describe("sessions", () => {
     void call;
     await new Promise((resolve) => setTimeout(resolve, 700));
     expect(events).toEqual(["tool-finished", "disposed"]);
+  });
+
+  it("counts a session whose dispose() is still running against the cap", async () => {
+    let finishDispose!: () => void;
+    const disposerGate = new Promise<void>((resolve) => {
+      finishDispose = resolve;
+    });
+    const handle = await start({
+      maxSessions: 1,
+      createServer: () => ({ server: makeServer(), dispose: () => disposerGate }),
+    });
+    const first = await raw(handle, { method: "POST", headers: jsonHeaders, body: initializeBody });
+    await raw(handle, { method: "DELETE", headers: { ...auth, "mcp-session-id": sessionIdOf(first) } });
+    const blocked = await raw(handle, { method: "POST", headers: jsonHeaders, body: initializeBody });
+    expect(blocked.status).toBe(503);
+    finishDispose();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const allowed = await raw(handle, { method: "POST", headers: jsonHeaders, body: initializeBody });
+    expect(allowed.status).toBe(200);
+  });
+
+  it("disposes a stateless server when the client drops while it is starting", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered!: () => void;
+    const factoryEntered = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let disposed = 0;
+    const handle = await start({
+      stateless: true,
+      createServer: async () => {
+        entered();
+        await gate;
+        return { server: makeServer(), dispose: () => void (disposed += 1) };
+      },
+    });
+    const req = httpRequest({
+      host: "127.0.0.1",
+      port: handle.port,
+      method: "POST",
+      path: "/mcp",
+      headers: jsonHeaders,
+    });
+    req.on("error", () => undefined);
+    req.end(initializeBody);
+    await factoryEntered;
+    req.destroy();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(disposed).toBe(1);
   });
 
   it("close() waits for a disposal that a DELETE already started", async () => {

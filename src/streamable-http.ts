@@ -418,7 +418,8 @@ export const createStreamableHttpServer = async (
   // cannot overshoot the cap while createServer is awaited.
   let pending = 0;
   const openWithinCap = async (): Promise<Session | undefined> => {
-    if (resources.size + pending >= maxSessions) return undefined;
+    // A session whose dispose() is still running holds its pool or client, so it counts too.
+    if (resources.size + disposals.size + pending >= maxSessions) return undefined;
     pending += 1;
     try {
       return await open();
@@ -511,15 +512,22 @@ export const createStreamableHttpServer = async (
     if (closing) return unavailable(response);
 
     if (stateless) {
-      const session = await openWithinCap();
-      if (!session) return unavailable(response);
-      // A client can drop the connection while the call is still running. Then wait for it,
-      // bounded, instead of closing its server and resources underneath the handler.
+      // Registered before the server starts, so a client that drops while createServer() or
+      // connect() is pending is seen. A call already running is waited for, bounded, instead
+      // of closing its server and resources underneath the handler.
       let responseClosed = false;
+      let current: Session | undefined;
       response.once("close", () => {
         responseClosed = true;
-        void disposeWhenIdle(session);
+        if (current) void disposeWhenIdle(current);
       });
+      const session = await openWithinCap();
+      if (!session) return unavailable(response);
+      current = session;
+      if (responseClosed) {
+        await dispose(session);
+        return;
+      }
       session.active += 1;
       try {
         await session.transport.handleRequest(request, response, body);
@@ -585,6 +593,14 @@ export const createStreamableHttpServer = async (
     await new Promise<void>((resolve) => listener.close(() => resolve()));
     throw new Error(
       `HOST "${config.host}" binds every interface; use the specific address clients will reach`,
+    );
+  }
+  // The token rule was applied to the configured name. A name such as localhost can resolve
+  // to a non-loopback address (a container hosts file), so check where it really bound.
+  if (config.token === "" && !isLoopbackHost(address.address)) {
+    await new Promise<void>((resolve) => listener.close(() => resolve()));
+    throw new Error(
+      `HOST "${config.host}" bound ${address.address}, which is not loopback; a token is required`,
     );
   }
 
