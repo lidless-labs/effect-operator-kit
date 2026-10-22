@@ -1,7 +1,8 @@
 import { Cause, Effect } from "effect";
 import type { OperatorError } from "../errors.js";
 import { defaultRedact, type RedactFn } from "../redaction.js";
-import { fail, type McpTextResult } from "../result.js";
+import { boundResult } from "../output.js";
+import { fail, getResultDefaults, type McpTextResult } from "../result.js";
 
 type TaggedShape = {
   _tag: string;
@@ -88,7 +89,7 @@ export const toMcpResult = (
     Effect.map((result) =>
       result._tag === "Left"
         ? fail(redact(operatorErrorMessage(Cause.squash(result.left))))
-        : result.right,
+        : boundResult(result.right, getResultDefaults().maxBytes),
     ),
   );
 

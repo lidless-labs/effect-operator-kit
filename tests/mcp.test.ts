@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   operatorErrorMessage,
   runAsMcpTool,
@@ -12,7 +12,13 @@ import {
   NotFoundError,
   TimeoutError,
 } from "../src/errors.js";
-import { fail, ok, type McpTextResult } from "../src/result.js";
+import {
+  configureResults,
+  fail,
+  ok,
+  resetResultDefaults,
+  type McpTextResult,
+} from "../src/result.js";
 
 const GHP_TOKEN = "ghp_abcdefghijklmnop";
 const N8N_KEY = "n8n-secret-key-value";
@@ -140,6 +146,29 @@ describe("toMcpResult / runAsMcpTool", () => {
     expect(message).not.toContain(GHP_TOKEN);
     expect(message).not.toContain(N8N_KEY);
     expect(message).toContain("[REDACTED]");
+  });
+});
+
+describe("output bounding in the adapters", () => {
+  afterEach(() => resetResultDefaults());
+
+  it("bounds an oversize successful result from the handler", async () => {
+    configureResults({ maxBytes: 2048 });
+    const handler = toToolHandler(() => Effect.succeed(ok({ rows: "r".repeat(10_000) })));
+    const result = await handler({});
+
+    expect(result.isError).toBeUndefined();
+    expect(Buffer.byteLength(result.content[0]!.text, "utf8")).toBeLessThanOrEqual(2048);
+    expect(result.structuredContent).toMatchObject({ truncated: true });
+  });
+
+  it("bounds a hand-built result that skipped ok()", async () => {
+    configureResults({ maxBytes: 2048 });
+    const raw: McpTextResult = { content: [{ type: "text", text: "s".repeat(10_000) }] };
+    const result = await runAsMcpTool(Effect.succeed(raw));
+
+    expect(Buffer.byteLength(result.content[0]!.text, "utf8")).toBeLessThanOrEqual(2048);
+    expect(result.structuredContent).toMatchObject({ truncated: true });
   });
 });
 
