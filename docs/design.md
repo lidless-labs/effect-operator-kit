@@ -224,3 +224,41 @@ Before adoption is considered safe:
 - All repos: auth headers are exact, secrets never appear in thrown messages or tool results, exit codes and CLI text stay golden-tested.
 
 No UI surface is involved. The main operator-experience risk is CLI/MCP drift: changed wording, missing `details`, altered `isError`, changed exit codes, or changed confirmation prompts.
+
+## Executor v2
+
+Executor v2 is an MCP gateway that imports a server by URL and applies a per-tool approval policy. These are the rules it applies to our servers, checked against its docs on 2026-10-22 (version 2.0.0-beta.25; see https://executor.sh/docs/mcp and https://executor.sh/docs/concepts/tools-and-approvals), and how the kit meets each one.
+
+| Executor behavior | What the kit does |
+|---|---|
+| Imports an MCP server by URL over Streamable HTTP. | `streamable-http` entry point: loopback default, bearer token, Host and Origin checks, body cap, session cap. |
+| Prompts only when a tool has `destructiveHint === true`. A write with no hint, or only `readOnlyHint: false`, runs unprompted. | `annotate()` defaults any write to `destructiveHint: true`; every preset sets all four hints; `assertToolAnnotations` fails a test on a missing or mislabeled tool. |
+| Refuses a result over 100,000 bytes instead of cutting it. | `ok()`, `fail()` and the MCP adapters cap results at 90,000 UTF-8 bytes and truncate with a marker and `structuredContent.truncated: true`. |
+| Reads `structuredContent` and `outputSchema` when present. | `ok()` emits `structuredContent` for object payloads. `outputSchema` is declared at tool registration and stays with the app. |
+| Gives one tool call a 60 second deadline. | Not enforced by the kit. See the pattern below. |
+| Attaches the upstream bearer itself, so the agent never sees it. | The server requires a token of at least 32 characters on any non-loopback bind and compares it in constant time. |
+
+### Approval tiers
+
+| Tier | Preset | `readOnlyHint` | `destructiveHint` | Use for |
+|---|---|---|---|---|
+| read | `READ_ONLY` | true | false | Lists, gets, searches, previews, dry runs. |
+| additive | `ADDITIVE` | false | false | Creates and sends that lose nothing. |
+| update | `UPDATE` | false | false | Changes to existing state that are safe to repeat. |
+| destructive | `DESTRUCTIVE` | false | true | Deletes, resets, stops, restarts, executes, overwrites, anything that disrupts a running system. |
+
+When in doubt a tool is destructive. Opting a write out of the default is a per-tool decision in the app, and a reviewer should see it.
+
+### Deadlines
+
+A tool that waits on slow work (an analyzer run, a pcap replay, report polling) must not hold the call for more than about 55 seconds. Start the work, return a handle such as `{ jobId, state: "running" }`, and add a read-only status tool that returns the state or the finished result. If a wait is unavoidable, wait up to 50 seconds and return the handle with `state: "running"` when the work is not done, so the caller polls instead of timing out. The kit has no helper for this yet because the job store belongs to each app.
+
+### Adding a server
+
+1. Annotate every tool and add the annotation test.
+2. Return results through `ok()` and `fail()` so they are bounded and structured. The adapters (`toToolHandler` and friends) also cap hand-built results, but they do not add `structuredContent` to them.
+3. Serve it with `runStreamableHttpServer`, a token from the environment, and `allowedHosts` for the public name if a proxy sits in front.
+4. In Executor, add the server by its Streamable HTTP URL with a static bearer header.
+5. Call a read tool and a destructive tool; only the second should ask for approval.
+
+Adoption steps for existing apps are in [MIGRATION.md](../MIGRATION.md).
