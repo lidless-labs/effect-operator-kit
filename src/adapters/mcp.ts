@@ -1,7 +1,8 @@
 import { Cause, Effect } from "effect";
 import type { OperatorError } from "../errors.js";
 import { defaultRedact, type RedactFn } from "../redaction.js";
-import { fail, type McpTextResult } from "../result.js";
+import { boundResult } from "../output.js";
+import { fail, getResultDefaults, type McpTextResult } from "../result.js";
 
 type TaggedShape = {
   _tag: string;
@@ -79,7 +80,21 @@ function formatTaggedThin(error: {
   }
 }
 
-/** Convert an Effect with OperatorError (or defects) into always-succeeding McpTextResult. */
+// A hand-built result can hold data JSON cannot carry (a cycle, a bigint). Sizing it throws,
+// and the adapters promise a result, so turn that into an error result.
+const boundHandlerResult = (result: McpTextResult, redact: RedactFn): McpTextResult => {
+  try {
+    return boundResult(result, getResultDefaults().maxBytes);
+  } catch (error) {
+    return fail(redact(`Result could not be serialized: ${error instanceof Error ? error.message : String(error)}`));
+  }
+};
+
+/**
+ * Convert an Effect with OperatorError (or defects) into always-succeeding McpTextResult.
+ * Successful results are bounded by the process-wide cap from `configureResults`; a
+ * per-call `maxBytes` on `ok()` or `fail()` can lower that cap but not raise it.
+ */
 export const toMcpResult = (
   effect: Effect.Effect<McpTextResult, OperatorError>,
   redact: RedactFn = defaultRedact,
@@ -88,7 +103,7 @@ export const toMcpResult = (
     Effect.map((result) =>
       result._tag === "Left"
         ? fail(redact(operatorErrorMessage(Cause.squash(result.left))))
-        : result.right,
+        : boundHandlerResult(result.right, redact),
     ),
   );
 
