@@ -70,6 +70,18 @@ describe("annotationsForTier", () => {
     const annotations = annotationsForTier("bogus" as ToolTier);
     expect(annotations).toMatchObject({ readOnlyHint: false, destructiveHint: true });
   });
+
+  it("fails closed on inherited Object.prototype keys", () => {
+    for (const name of ["__proto__", "constructor", "toString", "hasOwnProperty"]) {
+      const annotations = annotationsForTier(name as ToolTier);
+      expect(annotations, name).toEqual({
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false,
+      });
+    }
+  });
 });
 
 describe("annotate", () => {

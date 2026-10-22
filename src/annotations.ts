@@ -64,12 +64,12 @@ export const annotationsForTier = (
   tier: ToolTier,
   options: AnnotationOptions = {},
 ): ToolAnnotations => {
-  const base = TIER_BASES[tier];
-  if (base === undefined) {
+  // Own-property check: an inherited key such as "constructor" must not count as a tier.
+  if (!Object.hasOwn(TIER_BASES, tier)) {
     // A cast or untyped caller can pass anything; fail closed.
     return annotationsForTier("destructive", options);
   }
-  return build(base, options);
+  return build(TIER_BASES[tier], options);
 };
 
 /** Ready-made tier presets with no title. Frozen; use the functions to add one. */
