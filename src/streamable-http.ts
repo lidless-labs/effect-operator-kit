@@ -493,7 +493,8 @@ export const createStreamableHttpServer = async (
   listener.headersTimeout = 10_000;
   await new Promise<void>((resolve, reject) => {
     listener.once("error", reject);
-    listener.listen(config.port, config.host, () => {
+    // Node wants an IPv6 literal without brackets.
+    listener.listen(config.port, stripBrackets(config.host), () => {
       listener.off("error", reject);
       resolve();
     });
@@ -501,6 +502,13 @@ export const createStreamableHttpServer = async (
   const address = listener.address();
   if (!address || typeof address === "string") {
     throw new Error("HTTP listener did not bind a TCP port");
+  }
+  // Spellings such as "0", "0.0" or "0x0" pass the literal check but bind every interface.
+  if (WILDCARD_HOSTS.has(address.address)) {
+    await new Promise<void>((resolve) => listener.close(() => resolve()));
+    throw new Error(
+      `HOST "${config.host}" binds every interface; use the specific address clients will reach`,
+    );
   }
 
   const reaper = setInterval(() => {

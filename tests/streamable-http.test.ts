@@ -136,6 +136,28 @@ describe("configuration", () => {
     expect(res.status).toBe(200);
   });
 
+  it("refuses alternate spellings of the wildcard address after resolution", async () => {
+    for (const host of ["0", "0.0", "0x0"]) {
+      await expect(
+        createStreamableHttpServer({ createServer: makeServer, host, port: 0, token: TOKEN }),
+        host,
+      ).rejects.toThrow(/binds every interface/);
+    }
+  });
+
+  it("accepts a bracketed IPv6 literal", async () => {
+    let handle: StreamableHttpHandle;
+    try {
+      handle = await start({ host: "[::1]", token: undefined });
+    } catch (error) {
+      // No IPv6 loopback on this machine.
+      if (["EADDRNOTAVAIL", "EAFNOSUPPORT"].includes((error as NodeJS.ErrnoException).code ?? "")) return;
+      throw error;
+    }
+    expect(handle.host).toBe("::1");
+    expect(handle.url).toContain("[::1]");
+  });
+
   it("rejects a token shorter than 32 characters even on loopback", async () => {
     await expect(
       createStreamableHttpServer({ createServer: makeServer, port: 0, token: "short" }),
