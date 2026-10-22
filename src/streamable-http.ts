@@ -345,8 +345,10 @@ export const createStreamableHttpServer = async (
     });
     resources.delete(session);
     if (session.transport.sessionId) sessions.delete(session.transport.sessionId);
+    // Both run inside a promise callback, so a hook that throws before returning
+    // is settled like one that rejects, and the stored promise is always released.
     void Promise.allSettled([
-      session.server.close(),
+      Promise.resolve().then(() => session.server.close()),
       Promise.resolve().then(() => session.dispose?.()),
     ]).then(() => release());
     return session.disposed;
@@ -369,7 +371,10 @@ export const createStreamableHttpServer = async (
     const { server, dispose: extra } = unwrap(await options.createServer());
     // close() snapshots the resources, so one finished after that must be released here.
     if (closing) {
-      await Promise.allSettled([server.close(), Promise.resolve().then(() => extra?.())]);
+      await Promise.allSettled([
+        Promise.resolve().then(() => server.close()),
+        Promise.resolve().then(() => extra?.()),
+      ]);
       return undefined;
     }
     const transport = new StreamableHTTPServerTransport({
@@ -386,6 +391,11 @@ export const createStreamableHttpServer = async (
     } catch (error) {
       await dispose(session);
       throw error;
+    }
+    // close() may have started while connect was pending and already disposed this session.
+    if (closing) {
+      await dispose(session);
+      return undefined;
     }
     // connect installs its own onclose. Keep the SDK cleanup as well as ours. A client
     // DELETE closes the transport without going through close() or the reaper, so the

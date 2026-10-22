@@ -552,6 +552,58 @@ describe("sessions", () => {
     expect(disposed).toBe(1);
   });
 
+  it("still disposes and closes when server.close() throws synchronously", async () => {
+    let disposed = 0;
+    const handle = await createStreamableHttpServer({
+      createServer: () => {
+        const server = makeServer();
+        server.close = (() => {
+          throw new Error("close failed");
+        }) as never;
+        return { server, dispose: () => void (disposed += 1) };
+      },
+      port: 0,
+      token: TOKEN,
+    });
+    await raw(handle, { method: "POST", headers: jsonHeaders, body: initializeBody });
+    await expect(handle.close()).resolves.toBeUndefined();
+    expect(disposed).toBe(1);
+  });
+
+  it("answers 503 for a session whose connect finishes after close() began", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered!: () => void;
+    const connectEntered = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let disposed = 0;
+    const handle = await createStreamableHttpServer({
+      createServer: () => {
+        const server = makeServer();
+        const connect = server.connect.bind(server);
+        server.connect = (async (transport: never) => {
+          entered();
+          await gate;
+          return connect(transport);
+        }) as never;
+        return { server, dispose: () => void (disposed += 1) };
+      },
+      port: 0,
+      token: TOKEN,
+    });
+    const pendingInit = raw(handle, { method: "POST", headers: jsonHeaders, body: initializeBody });
+    await connectEntered;
+    const closing = handle.close();
+    release();
+    const res = await pendingInit;
+    await closing;
+    expect(res.status).toBe(503);
+    expect(disposed).toBe(1);
+  });
+
   it("lets a running call finish before disposing its session", async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
