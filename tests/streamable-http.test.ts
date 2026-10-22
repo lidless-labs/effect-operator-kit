@@ -231,12 +231,22 @@ describe("configuration", () => {
 });
 
 describe("helpers", () => {
-  it.each(["localhost", "127.0.0.1", "127.9.9.9", "::1", "[::1]", "::ffff:127.0.0.1"])(
+  it.each([
+    "localhost",
+    "127.0.0.1",
+    "127.9.9.9",
+    "::1",
+    "[::1]",
+    "0:0:0:0:0:0:0:1",
+    "[0000:0000:0000:0000:0000:0000:0000:0001]",
+    "::ffff:127.0.0.1",
+    "0:0:0:0:0:ffff:7f00:1",
+  ])(
     "treats %s as loopback",
     (host) => expect(isLoopbackHost(host)).toBe(true),
   );
 
-  it.each(["192.0.2.10", "example.com", "0.0.0.0", "::", "10.0.0.1"])(
+  it.each(["192.0.2.10", "example.com", "0.0.0.0", "::", "0:0:0:0:0:0:0:0", "10.0.0.1", "::2", "::ffff:10.0.0.1"])(
     "does not treat %s as loopback",
     (host) => expect(isLoopbackHost(host)).toBe(false),
   );

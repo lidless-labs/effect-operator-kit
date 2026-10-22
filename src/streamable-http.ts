@@ -102,9 +102,13 @@ const stripBrackets = (host: string): string =>
 /** True for localhost, 127.0.0.0/8, ::1 and ::ffff:127.0.0.0/8. */
 export const isLoopbackHost = (host: string): boolean => {
   const bare = stripBrackets(host.trim().toLowerCase());
-  if (LOOPBACK_NAMES.has(bare)) return true;
   if (isIP(bare) === 4) return bare.startsWith("127.");
-  return isIP(bare) === 6 && /^::ffff:(127\.|7f[0-9a-f]{2}:)/.test(bare);
+  if (isIP(bare) === 6) {
+    // Canonical form, so 0:0:0:0:0:0:0:1 and ::ffff:127.0.0.1 are recognized like ::1.
+    const canonical = stripBrackets(new URL(`http://[${bare}]`).hostname);
+    return canonical === "::1" || /^::ffff:7f[0-9a-f]{2}:/.test(canonical);
+  }
+  return LOOPBACK_NAMES.has(bare);
 };
 
 const digest = (value: string): Buffer => createHash("sha256").update(value).digest();
