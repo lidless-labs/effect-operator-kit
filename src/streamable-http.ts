@@ -27,6 +27,7 @@ export const DEFAULT_MAX_BODY_BYTES = 1_048_576;
 export const DEFAULT_MAX_SESSIONS = 128;
 export const DEFAULT_SESSION_IDLE_MS = 30 * 60_000;
 export const MIN_TOKEN_LENGTH = 32;
+export const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5_000;
 
 /** The slice of `McpServer` or `Server` the factory needs. */
 export interface ConnectableServer {
@@ -88,6 +89,8 @@ export interface StreamableHttpOptions {
   maxBodyBytes?: number;
   maxSessions?: number;
   sessionIdleMs?: number;
+  /** How long close() lets running calls finish before dropping connections. Defaults to 5 seconds. */
+  shutdownTimeoutMs?: number;
 }
 
 export interface StreamableHttpHandle {
@@ -364,6 +367,7 @@ export const createStreamableHttpServer = async (
   const maxBody = positiveInteger("maxBodyBytes", options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES);
   const maxSessions = positiveInteger("maxSessions", options.maxSessions ?? DEFAULT_MAX_SESSIONS);
   const idleMs = positiveInteger("sessionIdleMs", options.sessionIdleMs ?? DEFAULT_SESSION_IDLE_MS);
+  const shutdownMs = positiveInteger("shutdownTimeoutMs", options.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS);
   const stateless = options.stateless ?? false;
 
   const sessions = new Map<string, Session>();
@@ -388,6 +392,19 @@ export const createStreamableHttpServer = async (
       Promise.resolve().then(() => session.dispose?.()),
     ]).then(() => release());
     return session.disposed;
+  };
+
+  // A client DELETE can arrive while a call on the same session is still running. Free the
+  // session id now so nothing new reaches it, but give the running call up to the shutdown
+  // timeout to finish before its server and resources are disposed. The transport ends the
+  // call's HTTP response when it closes, so the wait is bounded rather than open-ended.
+  // During shutdown close() drains active calls itself and then disposes.
+  const disposeWhenIdle = async (session: Session): Promise<void> => {
+    const until = Date.now() + shutdownMs;
+    while (session.active > 0 && !closing && Date.now() < until) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    if (!closing) await dispose(session);
   };
 
   // Slots reserved by sessions still being created, so concurrent initializations
@@ -433,9 +450,14 @@ export const createStreamableHttpServer = async (
       throw error;
     }
     session.active -= 1;
-    // close() may have started while connect was pending and already disposed this session.
+    // close() may have started while connect was pending and already disposed this session,
+    // possibly at the shutdown deadline while connect was still running. Close again now
+    // that the connection exists; closing twice is harmless.
     if (closing) {
       await dispose(session);
+      await Promise.resolve()
+        .then(() => server.close())
+        .catch(() => undefined);
       return undefined;
     }
     // connect installs its own onclose. Keep the SDK cleanup as well as ours. A client
@@ -443,7 +465,8 @@ export const createStreamableHttpServer = async (
     // custom dispose hook has to run from here too.
     const onclose = transport.onclose;
     transport.onclose = () => {
-      void dispose(session);
+      if (transport.sessionId) sessions.delete(transport.sessionId);
+      void disposeWhenIdle(session);
       onclose?.();
     };
     return session;
@@ -580,7 +603,7 @@ export const createStreamableHttpServer = async (
         const deadline = setTimeout(() => {
           deadlineHit = true;
           listener.closeAllConnections();
-        }, 5_000);
+        }, shutdownMs);
         deadline.unref();
         try {
           // Let calls already running finish before their server and resources are torn down.

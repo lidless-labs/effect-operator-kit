@@ -700,6 +700,93 @@ describe("sessions", () => {
     expect(connectedWhenClosed).toBe(true);
   });
 
+  it("closes a connection that finishes after the shutdown deadline", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered!: () => void;
+    const connectEntered = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let connected = false;
+    const closeStates: boolean[] = [];
+    const handle = await createStreamableHttpServer({
+      createServer: () => {
+        const server = makeServer();
+        const connect = server.connect.bind(server);
+        const close = server.close.bind(server);
+        server.connect = (async (transport: never) => {
+          entered();
+          await gate;
+          await connect(transport);
+          connected = true;
+        }) as never;
+        server.close = (async () => {
+          closeStates.push(connected);
+          await close();
+        }) as never;
+        return server;
+      },
+      port: 0,
+      token: TOKEN,
+      shutdownTimeoutMs: 100,
+    });
+    const pendingInit = raw(handle, { method: "POST", headers: jsonHeaders, body: initializeBody }).catch(
+      () => undefined,
+    );
+    await connectEntered;
+    await handle.close();
+    release();
+    await pendingInit;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // The first close ran at the deadline, before connect settled. A second one follows it.
+    expect(closeStates[0]).toBe(false);
+    expect(closeStates.at(-1)).toBe(true);
+  });
+
+  it("defers disposal after a DELETE until the running call finishes", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started!: () => void;
+    const toolStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const events: string[] = [];
+    const handle = await start({
+      createServer: () => {
+        const server = new McpServer({ name: "test", version: "0.0.0" });
+        server.tool("slow", "Wait", {}, async () => {
+          started();
+          await gate;
+          events.push("tool-finished");
+          return { content: [{ type: "text", text: "done" }] };
+        });
+        return { server, dispose: () => void events.push("disposed") };
+      },
+      shutdownTimeoutMs: 400,
+    });
+    const init = await raw(handle, { method: "POST", headers: jsonHeaders, body: initializeBody });
+    const sessionId = sessionIdOf(init);
+    const call = raw(handle, {
+      method: "POST",
+      headers: { ...jsonHeaders, "mcp-session-id": sessionId },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "slow", arguments: {} } }),
+    }).catch(() => undefined);
+    await toolStarted;
+    const del = await raw(handle, { method: "DELETE", headers: { ...auth, "mcp-session-id": sessionId } });
+    expect(del.status).toBeLessThan(300);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(events).toEqual([]);
+    release();
+    // The transport ends the call's response on DELETE, so the reply itself is not awaited.
+    void call;
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(events).toEqual(["tool-finished", "disposed"]);
+  });
+
   it("lets a running call finish before disposing its session", async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
