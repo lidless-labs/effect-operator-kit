@@ -115,6 +115,14 @@ export const isLoopbackHost = (host: string): boolean => {
   return LOOPBACK_NAMES.has(bare);
 };
 
+/** The unspecified address in any spelling, including the IPv4-mapped form that listens on IPv4. */
+const isWildcardAddress = (address: string): boolean => {
+  if (isIP(address) === 4) return address === "0.0.0.0";
+  if (isIP(address) !== 6) return false;
+  const canonical = stripBrackets(canonicalHostname(`[${address}]`));
+  return canonical === "::" || canonical === "::ffff:0:0";
+};
+
 const digest = (value: string): Buffer => createHash("sha256").update(value).digest();
 
 /** Constant-time string equality: equal-length digests, so length is not leaked. */
@@ -537,7 +545,7 @@ export const createStreamableHttpServer = async (
     throw new Error("HTTP listener did not bind a TCP port");
   }
   // Spellings such as "0", "0.0" or "0x0" pass the literal check but bind every interface.
-  if (WILDCARD_HOSTS.has(address.address)) {
+  if (isWildcardAddress(address.address)) {
     await new Promise<void>((resolve) => listener.close(() => resolve()));
     throw new Error(
       `HOST "${config.host}" binds every interface; use the specific address clients will reach`,

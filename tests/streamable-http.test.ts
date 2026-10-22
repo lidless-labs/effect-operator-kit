@@ -137,7 +137,7 @@ describe("configuration", () => {
   });
 
   it("refuses alternate spellings of the wildcard address after resolution", async () => {
-    for (const host of ["0", "0.0", "0x0"]) {
+    for (const host of ["0", "0.0", "0x0", "::ffff:0.0.0.0", "0:0:0:0:0:ffff:0:0", "0:0:0:0:0:0:0:0"]) {
       await expect(
         createStreamableHttpServer({ createServer: makeServer, host, port: 0, token: TOKEN }),
         host,
