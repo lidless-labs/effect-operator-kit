@@ -158,6 +158,19 @@ describe("configuration", () => {
     expect(handle.url).toContain("[::1]");
   });
 
+  it.each([
+    ["maxBodyBytes", Number.NaN],
+    ["maxBodyBytes", 0],
+    ["maxSessions", Number.POSITIVE_INFINITY],
+    ["maxSessions", -1],
+    ["sessionIdleMs", Number.NaN],
+    ["sessionIdleMs", 1.5],
+  ])("rejects a %s of %s before listening", async (name, value) => {
+    await expect(
+      createStreamableHttpServer({ createServer: makeServer, port: 0, [name]: value }),
+    ).rejects.toThrow(new RegExp(`${name} must be a positive integer`));
+  });
+
   it("rejects a token shorter than 32 characters even on loopback", async () => {
     await expect(
       createStreamableHttpServer({ createServer: makeServer, port: 0, token: "short" }),
@@ -322,6 +335,17 @@ describe("Host and Origin checks", () => {
     expect(url.hostname).toBe(address);
     const res = await raw(handle, { path: "/healthz", address, headers: { host: url.host } });
     expect(res.status).toBe(200);
+  });
+
+  it("compares IPv6 authorities in canonical form", async () => {
+    const handle = await start({ host: "::ffff:127.0.0.1", token: undefined, allowedHosts: ["[::FFFF:7F00:1]:9"] });
+    const url = new URL(handle.url);
+    for (const host of [url.host, "[::ffff:127.0.0.1]:1234", "[0:0:0:0:0:ffff:7f00:1]"]) {
+      const res = await raw(handle, { path: "/healthz", headers: { host } });
+      expect(res.status, host).toBe(200);
+    }
+    const other = await raw(handle, { path: "/healthz", headers: { host: "[::ffff:10.0.0.1]" } });
+    expect(other.status).toBe(403);
   });
 
   it("rejects a Host that is not loopback, bound or allowed (DNS rebinding)", async () => {
@@ -634,6 +658,46 @@ describe("sessions", () => {
     await closing;
     expect(res.status).toBe(503);
     expect(disposed).toBe(1);
+  });
+
+  it("disposes a connecting session only after connect settles", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered!: () => void;
+    const connectEntered = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let connected = false;
+    let connectedWhenClosed: boolean | undefined;
+    const handle = await createStreamableHttpServer({
+      createServer: () => {
+        const server = makeServer();
+        const connect = server.connect.bind(server);
+        const close = server.close.bind(server);
+        server.connect = (async (transport: never) => {
+          entered();
+          await gate;
+          await connect(transport);
+          connected = true;
+        }) as never;
+        server.close = (async () => {
+          connectedWhenClosed ??= connected;
+          await close();
+        }) as never;
+        return server;
+      },
+      port: 0,
+      token: TOKEN,
+    });
+    const pendingInit = raw(handle, { method: "POST", headers: jsonHeaders, body: initializeBody });
+    await connectEntered;
+    const closing = handle.close();
+    release();
+    await pendingInit;
+    await closing;
+    expect(connectedWhenClosed).toBe(true);
   });
 
   it("lets a running call finish before disposing its session", async () => {

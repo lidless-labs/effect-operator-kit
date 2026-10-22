@@ -131,11 +131,22 @@ interface HostRule {
   port: string | undefined;
 }
 
+// An IPv6 literal has several spellings (::ffff:127.0.0.1 and ::ffff:7f00:1). URL parsing
+// picks one, so compare that form on both sides.
+const canonicalHostname = (hostname: string): string => {
+  if (!hostname.startsWith("[")) return hostname;
+  try {
+    return new URL(`http://${hostname}`).hostname;
+  } catch {
+    return hostname;
+  }
+};
+
 const parseHostRule = (value: string): HostRule | undefined => {
   const trimmed = value.trim().toLowerCase();
   const match = AUTHORITY.exec(trimmed);
   if (!match) return undefined;
-  const hostname = match[1]!;
+  const hostname = canonicalHostname(match[1]!);
   return { hostname, port: match[2]?.slice(1) };
 };
 
@@ -284,7 +295,7 @@ const resolveConfig = (options: StreamableHttpOptions): ResolvedConfig => {
   }
 
   const rules: HostRule[] = [{ hostname: stripBrackets(host).toLowerCase(), port: undefined }];
-  if (rules[0]!.hostname.includes(":")) rules[0]!.hostname = `[${rules[0]!.hostname}]`;
+  if (rules[0]!.hostname.includes(":")) rules[0]!.hostname = canonicalHostname(`[${rules[0]!.hostname}]`);
   for (const name of ["localhost", "127.0.0.1", "[::1]"]) rules.push({ hostname: name, port: undefined });
   for (const entry of [...(options.allowedHosts ?? []), ...splitList(fromEnv("ALLOWED_HOSTS"))]) {
     const rule = parseHostRule(entry);
@@ -307,6 +318,15 @@ const resolveConfig = (options: StreamableHttpOptions): ResolvedConfig => {
   }
 
   return { name: options.name ?? "mcp", host, port, token, allowedHosts: rules, allowedOrigins };
+};
+
+// These limits protect memory and sessions. NaN or Infinity (an unparsed config value)
+// would silently disable them, so refuse anything that is not a positive integer.
+const positiveInteger = (name: string, value: number): number => {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return value;
 };
 
 interface Session {
@@ -333,9 +353,9 @@ export const createStreamableHttpServer = async (
   const config = resolveConfig(options);
   const path = options.path ?? "/mcp";
   const healthPath = options.healthPath ?? "/healthz";
-  const maxBody = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
-  const maxSessions = options.maxSessions ?? DEFAULT_MAX_SESSIONS;
-  const idleMs = options.sessionIdleMs ?? DEFAULT_SESSION_IDLE_MS;
+  const maxBody = positiveInteger("maxBodyBytes", options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES);
+  const maxSessions = positiveInteger("maxSessions", options.maxSessions ?? DEFAULT_MAX_SESSIONS);
+  const idleMs = positiveInteger("sessionIdleMs", options.sessionIdleMs ?? DEFAULT_SESSION_IDLE_MS);
   const stateless = options.stateless ?? false;
 
   const sessions = new Map<string, Session>();
@@ -394,12 +414,17 @@ export const createStreamableHttpServer = async (
     });
     const session: Session = { server, dispose: extra, transport, lastUsed: Date.now(), active: 0 };
     resources.add(session);
+    // A session that is still connecting counts as active, so close() waits for connect
+    // to settle and then disposes a server that is really connected.
+    session.active += 1;
     try {
       await server.connect(transport);
     } catch (error) {
+      session.active -= 1;
       await dispose(session);
       throw error;
     }
+    session.active -= 1;
     // close() may have started while connect was pending and already disposed this session.
     if (closing) {
       await dispose(session);
@@ -530,7 +555,7 @@ export const createStreamableHttpServer = async (
 
   const boundHost = address.address.includes(":") ? `[${address.address}]` : address.address;
   // A configured DNS name resolves to this address, and the URL handed back uses the address.
-  config.allowedHosts.push({ hostname: boundHost.toLowerCase(), port: undefined });
+  config.allowedHosts.push({ hostname: canonicalHostname(boundHost.toLowerCase()), port: undefined });
   let closePromise: Promise<void> | undefined;
   return {
     host: address.address,
