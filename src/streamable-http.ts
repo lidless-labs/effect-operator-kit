@@ -373,6 +373,8 @@ export const createStreamableHttpServer = async (
   const sessions = new Map<string, Session>();
   // Includes initializations in flight, so both capacity and shutdown cover them.
   const resources = new Set<Session>();
+  // Disposals in progress, which no longer appear in `resources`.
+  const disposals = new Set<Promise<void>>();
   let closing = false;
 
   // Idempotent and re-entrant: the promise is stored before any teardown runs, because
@@ -391,7 +393,12 @@ export const createStreamableHttpServer = async (
       Promise.resolve().then(() => session.server.close()),
       Promise.resolve().then(() => session.dispose?.()),
     ]).then(() => release());
-    return session.disposed;
+    // Keep the promise until it settles, so close() can wait for disposals that a DELETE,
+    // the reaper or a stateless response started before it.
+    const settled = session.disposed;
+    disposals.add(settled);
+    void settled.then(() => disposals.delete(settled));
+    return settled;
   };
 
   // A client DELETE can arrive while a call on the same session is still running. Free the
@@ -506,8 +513,13 @@ export const createStreamableHttpServer = async (
     if (stateless) {
       const session = await openWithinCap();
       if (!session) return unavailable(response);
-      const finish = (): void => void dispose(session);
-      response.once("close", finish);
+      // A client can drop the connection while the call is still running. Then wait for it,
+      // bounded, instead of closing its server and resources underneath the handler.
+      let responseClosed = false;
+      response.once("close", () => {
+        responseClosed = true;
+        void disposeWhenIdle(session);
+      });
       session.active += 1;
       try {
         await session.transport.handleRequest(request, response, body);
@@ -516,6 +528,7 @@ export const createStreamableHttpServer = async (
         throw error;
       } finally {
         session.active -= 1;
+        if (responseClosed) void dispose(session);
       }
       return;
     }
@@ -610,7 +623,7 @@ export const createStreamableHttpServer = async (
           while ([...resources].some((session) => session.active > 0) && !deadlineHit) {
             await new Promise((resolve) => setTimeout(resolve, 25));
           }
-          await Promise.allSettled([...resources].map(dispose));
+          await Promise.allSettled([...[...resources].map(dispose), ...disposals]);
           listener.closeIdleConnections();
           await stopped;
         } finally {

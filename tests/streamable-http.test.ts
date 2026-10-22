@@ -787,6 +787,68 @@ describe("sessions", () => {
     expect(events).toEqual(["tool-finished", "disposed"]);
   });
 
+  it("close() waits for a disposal that a DELETE already started", async () => {
+    let disposerDone = false;
+    const handle = await start({
+      createServer: () => ({
+        server: makeServer(),
+        dispose: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 200));
+          disposerDone = true;
+        },
+      }),
+    });
+    const init = await raw(handle, { method: "POST", headers: jsonHeaders, body: initializeBody });
+    await raw(handle, { method: "DELETE", headers: { ...auth, "mcp-session-id": sessionIdOf(init) } });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(disposerDone).toBe(false);
+    await handle.close();
+    expect(disposerDone).toBe(true);
+  });
+
+  it("keeps a stateless call's resources until it finishes after the client drops", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started!: () => void;
+    const toolStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const events: string[] = [];
+    const handle = await start({
+      stateless: true,
+      shutdownTimeoutMs: 2000,
+      createServer: () => {
+        const server = new McpServer({ name: "test", version: "0.0.0" });
+        server.tool("slow", "Wait", {}, async () => {
+          started();
+          await gate;
+          events.push("tool-finished");
+          return { content: [{ type: "text", text: "done" }] };
+        });
+        return { server, dispose: () => void events.push("disposed") };
+      },
+    });
+    const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "slow", arguments: {} } });
+    const req = httpRequest({
+      host: "127.0.0.1",
+      port: handle.port,
+      method: "POST",
+      path: "/mcp",
+      headers: jsonHeaders,
+    });
+    req.on("error", () => undefined);
+    req.end(body);
+    await toolStarted;
+    req.destroy();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(events).toEqual([]);
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(events).toEqual(["tool-finished", "disposed"]);
+  });
+
   it("lets a running call finish before disposing its session", async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
