@@ -256,7 +256,7 @@ A tool that waits on slow work (an analyzer run, a pcap replay, report polling) 
 ### Adding a server
 
 1. Annotate every tool and add the annotation test.
-2. Return results through `ok()` and `fail()` (or the adapters) so they are bounded and structured.
+2. Return results through `ok()` and `fail()` so they are bounded and structured. The adapters (`toToolHandler` and friends) also cap hand-built results, but they do not add `structuredContent` to them.
 3. Serve it with `runStreamableHttpServer`, a token from the environment, and `allowedHosts` for the public name if a proxy sits in front.
 4. In Executor, add the server by its Streamable HTTP URL with a static bearer header.
 5. Call a read tool and a destructive tool; only the second should ask for approval.

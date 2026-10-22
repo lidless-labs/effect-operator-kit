@@ -16,7 +16,7 @@ Bump the pin in one app at a time, run its tests, then move to the next. `main` 
 
 Two, both in `ok()`, `fail()` and `partialFailure()`:
 
-1. They no longer set the non-standard `details` field. Apps or tests that read `result.details` should read `result.structuredContent` instead, or keep `details` for now with one call at startup:
+1. They no longer set the non-standard `details` field. For `ok()` and `partialFailure()`, read `result.structuredContent` instead of `result.details`; it holds the same payload when the payload is a plain object (arrays and primitives have text only). For `fail(message, details)`, the old `details` is now `result.structuredContent.details`, because `structuredContent` is `{ error, details }`. Or keep `details` for now with one call at startup:
 
    ```ts
    import { configureResults } from "@lidless-labs/effect-operator-kit";
