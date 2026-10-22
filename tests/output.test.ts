@@ -136,6 +136,33 @@ describe("boundResult", () => {
     expect(utf8ByteLength(bounded.content[0]!.text)).toBeLessThanOrEqual(2048);
   });
 
+  it("counts text, structuredContent and details together", () => {
+    // Each copy is under the cap on its own; together they are about 3x.
+    const payload = { big: "j".repeat(900) };
+    const result = make(JSON.stringify(payload), { structuredContent: payload, details: payload });
+    const bounded = boundResult(result, 2048);
+    expect(bounded.structuredContent).toMatchObject({ truncated: true });
+    expect("details" in bounded).toBe(false);
+  });
+
+  it("keeps the whole serialized result, metadata included, within the cap", () => {
+    const payload = { big: "k".repeat(30_000) };
+    const result = make(JSON.stringify(payload), { structuredContent: payload });
+    for (const cap of [1024, 2048, 90_000]) {
+      const bounded = boundResult(result, cap);
+      const total =
+        utf8ByteLength(bounded.content[0]!.text) +
+        utf8ByteLength(JSON.stringify(bounded.structuredContent));
+      expect(total, `cap ${cap}`).toBeLessThanOrEqual(cap);
+    }
+  });
+
+  it("leaves a plain-object payload alone when the duplicated copies still fit", () => {
+    const payload = { big: "m".repeat(400) };
+    const result = make(JSON.stringify(payload), { structuredContent: payload });
+    expect(boundResult(result, 2048)).toBe(result);
+  });
+
   it("does not mutate its input", () => {
     const result = make("i".repeat(5000), { details: { x: 1 } });
     boundResult(result, 2048);
