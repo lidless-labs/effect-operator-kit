@@ -40,6 +40,13 @@ describe("ok", () => {
     expect("details" in ok(payload, { legacyDetails: false })).toBe(false);
   });
 
+  it("treats a per-call maxBytes above the process cap as the process cap", () => {
+    configureResults({ maxBytes: 1500 });
+    const result = ok({ rows: "r".repeat(10_000) }, { maxBytes: 5000 });
+    expect(result.structuredContent).toMatchObject({ truncated: true, maxBytes: 1500 });
+    expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(1500);
+  });
+
   it("gives non-plain objects text only, since they do not serialize to a record", () => {
     class Item {
       id = 1;

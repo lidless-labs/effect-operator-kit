@@ -21,8 +21,8 @@ export interface ResultDefaults {
 
 export interface ResultOptions {
   /**
-   * Override the process-wide byte cap for this result. The MCP adapters apply the
-   * process-wide cap again, so through them a per-call value can lower the cap, not raise it.
+   * Lower the byte cap for this result. The process-wide cap from `configureResults` is the
+   * ceiling: the MCP adapters apply it again, so a higher per-call value has no effect.
    */
   maxBytes?: number;
   /** Override the process-wide `legacyDetails` setting for this result. */
@@ -72,7 +72,10 @@ const finish = <T>(
   if (details !== undefined && (options.legacyDetails ?? defaults.legacyDetails)) {
     result.details = details;
   }
-  return boundResult(result, options.maxBytes ?? defaults.maxBytes);
+  // A per-call cap can only lower the process-wide one. The MCP adapters apply the
+  // process-wide cap again, and a higher per-call cap would be cut a second time there.
+  const requested = resolveMaxOutputBytes(options.maxBytes ?? defaults.maxBytes);
+  return boundResult(result, Math.min(requested, defaults.maxBytes));
 };
 
 /**

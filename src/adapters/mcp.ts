@@ -92,8 +92,8 @@ const boundHandlerResult = (result: McpTextResult, redact: RedactFn): McpTextRes
 
 /**
  * Convert an Effect with OperatorError (or defects) into always-succeeding McpTextResult.
- * Successful results are bounded by the process-wide cap from `configureResults`, so a
- * per-call `maxBytes` on `ok()` or `fail()` can lower the cap through these adapters but not raise it.
+ * Successful results are bounded by the process-wide cap from `configureResults`; a
+ * per-call `maxBytes` on `ok()` or `fail()` can lower that cap but not raise it.
  */
 export const toMcpResult = (
   effect: Effect.Effect<McpTextResult, OperatorError>,
