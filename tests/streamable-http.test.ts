@@ -556,6 +556,35 @@ describe("sessions", () => {
     expect(after.status).toBe(404);
   });
 
+  it("does not reap a session that holds an open SSE stream", async () => {
+    let closed = 0;
+    const handle = await start({
+      sessionIdleMs: 50,
+      createServer: () => ({ server: makeServer(), dispose: () => void (closed += 1) }),
+    });
+    const init = await raw(handle, { method: "POST", headers: jsonHeaders, body: initializeBody });
+    const sessionId = sessionIdOf(init);
+    await raw(handle, {
+      method: "POST",
+      headers: { ...jsonHeaders, "mcp-session-id": sessionId },
+      body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
+    });
+    const stream = httpRequest({
+      host: "127.0.0.1",
+      port: handle.port,
+      method: "GET",
+      path: "/mcp",
+      headers: { ...auth, accept: "text/event-stream", "mcp-session-id": sessionId },
+    });
+    stream.on("error", () => undefined);
+    stream.end();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(closed).toBe(0);
+    stream.destroy();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(closed).toBe(1);
+  });
+
   it("disposes open sessions on close and then refuses requests", async () => {
     let disposed = 0;
     const handle = await createStreamableHttpServer({

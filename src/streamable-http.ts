@@ -346,6 +346,8 @@ interface Session {
   transport: StreamableHTTPServerTransport;
   lastUsed: number;
   active: number;
+  /** Open standalone SSE responses (GET). They keep the session alive but do not delay shutdown. */
+  streams: number;
   disposed?: Promise<void>;
 }
 
@@ -445,7 +447,7 @@ export const createStreamableHttpServer = async (
         sessions.set(id, session);
       },
     });
-    const session: Session = { server, dispose: extra, transport, lastUsed: Date.now(), active: 0 };
+    const session: Session = { server, dispose: extra, transport, lastUsed: Date.now(), active: 0, streams: 0 };
     resources.add(session);
     // A session that is still connecting counts as active, so close() waits for connect
     // to settle and then disposes a server that is really connected.
@@ -556,6 +558,15 @@ export const createStreamableHttpServer = async (
     session.lastUsed = Date.now();
     const activeCall = request.method === "POST";
     if (activeCall) session.active += 1;
+    if (request.method === "GET") {
+      // A standalone SSE channel stays open with no POSTs. Count it until it closes so the
+      // idle reaper does not dispose a session that is still in use.
+      session.streams += 1;
+      response.once("close", () => {
+        session.streams -= 1;
+        session.lastUsed = Date.now();
+      });
+    }
     try {
       await session.transport.handleRequest(request, response, body);
     } finally {
@@ -606,7 +617,7 @@ export const createStreamableHttpServer = async (
 
   const reaper = setInterval(() => {
     for (const session of resources) {
-      if (session.active === 0 && Date.now() - session.lastUsed > idleMs) {
+      if (session.active === 0 && session.streams === 0 && Date.now() - session.lastUsed > idleMs) {
         void dispose(session).catch(() => undefined);
       }
     }
