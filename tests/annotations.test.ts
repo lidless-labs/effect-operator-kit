@@ -269,6 +269,22 @@ describe("recordToolAnnotations", () => {
     expect(tools.get("c")).toBeUndefined();
   });
 
+  it("does not mistake an input schema field named like a hint for the annotations", () => {
+    const { server, tools } = recordToolAnnotations();
+    const schema = { readOnlyHint: { _def: "zod-boolean-like" } };
+    server.tool("a", "desc", schema, DESTRUCTIVE, async () => ({}));
+    server.tool("b", "desc", schema, async () => ({}));
+    expect(tools.get("a")).toBe(DESTRUCTIVE);
+    expect(tools.get("b")).toBeUndefined();
+  });
+
+  it("ignores inherited hint values", () => {
+    const { server, tools } = recordToolAnnotations();
+    const inherited = Object.create({ readOnlyHint: true, destructiveHint: false });
+    server.tool("a", "desc", inherited, async () => ({}));
+    expect(tools.get("a")).toBeUndefined();
+  });
+
   it("records annotations from registerTool config", () => {
     const { server, tools } = recordToolAnnotations();
     server.registerTool("a", { annotations: UPDATE });

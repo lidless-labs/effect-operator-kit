@@ -234,11 +234,15 @@ export const assertToolAnnotations = (
 
 const HINT_KEYS = ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"];
 
+// An input schema can have a field named like a hint (a zod shape with `readOnlyHint`),
+// but its value is a schema object. Only an own, boolean-valued hint marks the annotations.
 const looksLikeAnnotations = (value: unknown): value is ToolAnnotations =>
   value !== null &&
   typeof value === "object" &&
   !Array.isArray(value) &&
-  HINT_KEYS.some((key) => key in value);
+  HINT_KEYS.some(
+    (key) => Object.hasOwn(value, key) && typeof (value as Record<string, unknown>)[key] === "boolean",
+  );
 
 /**
  * Fake MCP server that records each tool's annotations, for tests. Supports
