@@ -1,6 +1,8 @@
 // The tokens below are generated fixtures for this test file, not credentials.
 // content-guard: allow secret/bearer-token file
+import { lookup } from "node:dns/promises";
 import { request as httpRequest } from "node:http";
+import { hostname as osHostname } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -58,12 +60,13 @@ const raw = (
     path?: string;
     headers?: Record<string, string>;
     body?: string | Buffer;
+    address?: string;
   } = {},
 ): Promise<RawResponse> =>
   new Promise((resolve, reject) => {
     const req = httpRequest(
       {
-        host: "127.0.0.1",
+        host: init.address ?? "127.0.0.1",
         port: handle.port,
         method: init.method ?? "GET",
         path: init.path ?? "/mcp",
@@ -274,6 +277,21 @@ describe("Host and Origin checks", () => {
     }
   });
 
+  it("accepts the address in the returned url when bound by a DNS name", async () => {
+    const name = osHostname();
+    let address: string;
+    try {
+      address = (await lookup(name, { family: 4 })).address;
+    } catch {
+      return; // the machine name does not resolve here, so there is nothing to bind by name
+    }
+    const handle = await start({ host: name });
+    const url = new URL(handle.url);
+    expect(url.hostname).toBe(address);
+    const res = await raw(handle, { path: "/healthz", address, headers: { host: url.host } });
+    expect(res.status).toBe(200);
+  });
+
   it("rejects a Host that is not loopback, bound or allowed (DNS rebinding)", async () => {
     const handle = await start();
     for (const host of ["evil.example", "evil.example:80", "127.0.0.1@evil.example", "127.0.0.1/x", "127.1"]) {
@@ -362,6 +380,8 @@ describe("request body", () => {
     expect(DEFAULT_MAX_BODY_BYTES).toBe(1_048_576);
   });
 });
+
+const sessionIdOf = (response: RawResponse): string => response.headers["mcp-session-id"] as string;
 
 describe("sessions", () => {
   it("serves a full MCP exchange through the SDK client", async () => {
@@ -466,6 +486,113 @@ describe("sessions", () => {
     await handle.close();
     expect(disposed).toBe(1);
     await expect(raw(handle, { path: "/healthz" })).rejects.toThrow();
+  });
+
+  it("runs the custom dispose hook when a client ends its session with DELETE", async () => {
+    let disposed = 0;
+    const handle = await start({
+      createServer: () => ({ server: makeServer(), dispose: () => void (disposed += 1) }),
+    });
+    const res = await raw(handle, { method: "POST", headers: jsonHeaders, body: initializeBody });
+    const sessionId = res.headers["mcp-session-id"] as string;
+    const del = await raw(handle, {
+      method: "DELETE",
+      headers: { ...auth, "mcp-session-id": sessionId },
+    });
+    expect(del.status).toBeLessThan(300);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(disposed).toBe(1);
+    // The session is gone, and a later close() does not dispose it a second time.
+    await handle.close();
+    expect(disposed).toBe(1);
+  });
+
+  it("runs the custom dispose hook when the SDK client closes", async () => {
+    let disposed = 0;
+    const handle = await start({
+      createServer: () => ({ server: makeServer(), dispose: () => void (disposed += 1) }),
+    });
+    const client = new Client({ name: "c", version: "0" });
+    const transport = new StreamableHTTPClientTransport(new URL(handle.url), {
+      requestInit: { headers: auth },
+    });
+    await client.connect(transport);
+    await transport.terminateSession();
+    await client.close();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(disposed).toBe(1);
+  });
+
+  it("disposes a session whose factory finishes after close() began", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered!: () => void;
+    const factoryEntered = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let disposed = 0;
+    const handle = await createStreamableHttpServer({
+      createServer: async () => {
+        entered();
+        await gate;
+        return { server: makeServer(), dispose: () => void (disposed += 1) };
+      },
+      port: 0,
+      token: TOKEN,
+    });
+    const pendingInit = raw(handle, { method: "POST", headers: jsonHeaders, body: initializeBody });
+    await factoryEntered;
+    const closing = handle.close();
+    release();
+    const res = await pendingInit;
+    await closing;
+    expect(res.status).toBe(503);
+    expect(disposed).toBe(1);
+  });
+
+  it("lets a running call finish before disposing its session", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started!: () => void;
+    const toolStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const events: string[] = [];
+    const handle = await createStreamableHttpServer({
+      createServer: () => {
+        const server = new McpServer({ name: "test", version: "0.0.0" });
+        server.tool("slow", "Wait", {}, async () => {
+          started();
+          await gate;
+          events.push("tool-finished");
+          return { content: [{ type: "text", text: "done" }] };
+        });
+        return { server, dispose: () => void events.push("disposed") };
+      },
+      port: 0,
+      token: TOKEN,
+    });
+    const init = await raw(handle, { method: "POST", headers: jsonHeaders, body: initializeBody });
+    const sessionId = sessionIdOf(init);
+    const call = raw(handle, {
+      method: "POST",
+      headers: { ...jsonHeaders, "mcp-session-id": sessionId },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "slow", arguments: {} } }),
+    });
+    await toolStarted;
+    const closing = handle.close();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(events).toEqual([]);
+    release();
+    const result = await call;
+    await closing;
+    expect(result.status).toBe(200);
+    expect(result.body).toContain("done");
+    expect(events).toEqual(["tool-finished", "disposed"]);
   });
 
   it("close is idempotent", async () => {

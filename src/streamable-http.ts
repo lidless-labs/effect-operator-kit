@@ -335,12 +335,20 @@ export const createStreamableHttpServer = async (
   const resources = new Set<Session>();
   let closing = false;
 
+  // Idempotent and re-entrant: the promise is stored before any teardown runs, because
+  // server.close() closes the transport, which calls back into dispose().
   const dispose = (session: Session): Promise<void> => {
-    session.disposed ??= (async () => {
-      resources.delete(session);
-      if (session.transport.sessionId) sessions.delete(session.transport.sessionId);
-      await Promise.allSettled([session.server.close(), session.dispose?.()]);
-    })();
+    if (session.disposed) return session.disposed;
+    let release!: () => void;
+    session.disposed = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    resources.delete(session);
+    if (session.transport.sessionId) sessions.delete(session.transport.sessionId);
+    void Promise.allSettled([
+      session.server.close(),
+      Promise.resolve().then(() => session.dispose?.()),
+    ]).then(() => release());
     return session.disposed;
   };
 
@@ -357,8 +365,13 @@ export const createStreamableHttpServer = async (
     }
   };
 
-  const open = async (): Promise<Session> => {
+  const open = async (): Promise<Session | undefined> => {
     const { server, dispose: extra } = unwrap(await options.createServer());
+    // close() snapshots the resources, so one finished after that must be released here.
+    if (closing) {
+      await Promise.allSettled([server.close(), Promise.resolve().then(() => extra?.())]);
+      return undefined;
+    }
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: stateless ? undefined : randomUUID,
       enableJsonResponse: true,
@@ -374,18 +387,24 @@ export const createStreamableHttpServer = async (
       await dispose(session);
       throw error;
     }
-    // connect installs its own onclose. Keep the SDK cleanup as well as ours.
+    // connect installs its own onclose. Keep the SDK cleanup as well as ours. A client
+    // DELETE closes the transport without going through close() or the reaper, so the
+    // custom dispose hook has to run from here too.
     const onclose = transport.onclose;
     transport.onclose = () => {
-      resources.delete(session);
-      if (transport.sessionId) sessions.delete(transport.sessionId);
+      void dispose(session);
       onclose?.();
     };
     return session;
   };
 
+  // While shutting down, drop the connection after the answer so close() is not held
+  // open by a keep-alive socket that went idle after its sweep.
+  const unavailable = (response: ServerResponse): void =>
+    sendJson(response, 503, { error: "Service unavailable" }, closing ? { connection: "close" } : {});
+
   const handle = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
-    if (closing) return sendJson(response, 503, { error: "Service unavailable" });
+    if (closing) return unavailable(response);
     if (
       !matchesHost(request.headers.host, config.allowedHosts) ||
       !matchesOrigin(request.headers.origin, config.allowedOrigins)
@@ -408,18 +427,21 @@ export const createStreamableHttpServer = async (
     }
     const body = request.method === "POST" ? await readJsonBody(request, maxBody) : undefined;
     // close() snapshots the resources; one created after that would never be disposed.
-    if (closing) return sendJson(response, 503, { error: "Service unavailable" });
+    if (closing) return unavailable(response);
 
     if (stateless) {
       const session = await openWithinCap();
-      if (!session) return sendJson(response, 503, { error: "Service unavailable" });
+      if (!session) return unavailable(response);
       const finish = (): void => void dispose(session);
       response.once("close", finish);
+      session.active += 1;
       try {
         await session.transport.handleRequest(request, response, body);
       } catch (error) {
         await dispose(session);
         throw error;
+      } finally {
+        session.active -= 1;
       }
       return;
     }
@@ -433,7 +455,7 @@ export const createStreamableHttpServer = async (
         return sendJson(response, 400, { error: "Initialize a session first" });
       }
       session = await openWithinCap();
-      if (!session) return sendJson(response, 503, { error: "Service unavailable" });
+      if (!session) return unavailable(response);
       created = true;
     }
     session.lastUsed = Date.now();
@@ -481,6 +503,8 @@ export const createStreamableHttpServer = async (
   reaper.unref();
 
   const boundHost = address.address.includes(":") ? `[${address.address}]` : address.address;
+  // A configured DNS name resolves to this address, and the URL handed back uses the address.
+  config.allowedHosts.push({ hostname: boundHost.toLowerCase(), port: undefined });
   let closePromise: Promise<void> | undefined;
   return {
     host: address.address,
@@ -493,9 +517,17 @@ export const createStreamableHttpServer = async (
         const stopped = new Promise<void>((resolve, reject) => {
           listener.close((error) => (error ? reject(error) : resolve()));
         });
-        const deadline = setTimeout(() => listener.closeAllConnections(), 5_000);
+        let deadlineHit = false;
+        const deadline = setTimeout(() => {
+          deadlineHit = true;
+          listener.closeAllConnections();
+        }, 5_000);
         deadline.unref();
         try {
+          // Let calls already running finish before their server and resources are torn down.
+          while ([...resources].some((session) => session.active > 0) && !deadlineHit) {
+            await new Promise((resolve) => setTimeout(resolve, 25));
+          }
           await Promise.allSettled([...resources].map(dispose));
           listener.closeIdleConnections();
           await stopped;
