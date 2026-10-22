@@ -75,7 +75,11 @@ export interface StreamableHttpOptions {
    * matches that port only.
    */
   allowedHosts?: readonly string[];
-  /** Extra Origin values to accept, as exact origins like `https://host`. */
+  /**
+   * Extra Origin values to accept, as exact origins like `https://host`. This is a request
+   * guard: a browser request from any other origin is refused. The server sends no CORS
+   * headers and does not answer preflight, so it serves non-browser MCP clients.
+   */
   allowedOrigins?: readonly string[];
   /** One server and transport per POST, no sessions. GET and DELETE answer 405. */
   stateless?: boolean;

@@ -45,4 +45,4 @@ await runStreamableHttpServer({
 });
 ```
 
-It binds loopback by default and refuses a wildcard bind. A bearer token (32 characters or more, constant-time compare) is required on any non-loopback bind and enforced whenever one is set. Host and Origin are checked against loopback, the bound address and the explicit `allowedHosts` / `allowedOrigins` lists, bodies are capped at 1 MiB, and sessions are capped (128) and reaped when idle (30 minutes). Pass `stateless: true` for one server per request with no sessions.
+It binds loopback by default and refuses a wildcard bind. A bearer token (32 characters or more, constant-time compare) is required on any non-loopback bind and enforced whenever one is set. Host and Origin are checked against loopback, the bound address and the explicit `allowedHosts` / `allowedOrigins` lists (a guard against cross-site requests; the server sends no CORS headers and does not answer preflight, so it is for non-browser MCP clients), bodies are capped at 1 MiB, and sessions are capped (128) and reaped when idle (30 minutes). Pass `stateless: true` for one server per request with no sessions.
