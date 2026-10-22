@@ -184,6 +184,17 @@ describe("boundResult", () => {
     }
   });
 
+  it("drops large extension fields such as _meta from a truncated result", () => {
+    const result = {
+      ...make("n".repeat(5000), { isError: true }),
+      _meta: { blob: "m".repeat(3000) },
+    } as BoundableResult;
+    const bounded = boundResult(result, 1024);
+    expect("_meta" in bounded).toBe(false);
+    expect(bounded.isError).toBe(true);
+    expect(utf8ByteLength(JSON.stringify(bounded))).toBeLessThanOrEqual(1024);
+  });
+
   it("does not mutate its input", () => {
     const result = make("i".repeat(5000), { details: { x: 1 } });
     boundResult(result, 2048);

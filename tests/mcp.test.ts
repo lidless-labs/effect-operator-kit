@@ -162,6 +162,15 @@ describe("output bounding in the adapters", () => {
     expect(result.structuredContent).toMatchObject({ truncated: true });
   });
 
+  it("turns a result JSON cannot carry into an error result instead of rejecting", async () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    const raw: McpTextResult = { content: [{ type: "text", text: "x" }], structuredContent: cyclic };
+    const result = await runAsMcpTool(Effect.succeed(raw));
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain("could not be serialized");
+  });
+
   it("bounds a hand-built result that skipped ok()", async () => {
     configureResults({ maxBytes: 2048 });
     const raw: McpTextResult = { content: [{ type: "text", text: "s".repeat(10_000) }] };

@@ -50,6 +50,14 @@ describe("ok", () => {
     expect(ok(Object.create(null)).structuredContent).toEqual({});
   });
 
+  it("uses the serialized form, so a toJSON hook cannot put a non-object in structuredContent", () => {
+    const toArray = { toJSON: () => [1, 2] };
+    const toString = { toJSON: () => "text" };
+    expect(ok(toArray).structuredContent).toBeUndefined();
+    expect(ok(toString).structuredContent).toBeUndefined();
+    expect(ok({ toJSON: () => ({ a: 1 }) }).structuredContent).toEqual({ a: 1 });
+  });
+
   it("gives arrays and primitives text only, since structuredContent must be an object", () => {
     for (const value of ["hello", [1, 2], 7, null]) {
       const result = ok(value);

@@ -127,8 +127,9 @@ const truncateEncoded = (text: string, budget: number): string => {
  * when present. A result within the cap is returned as is. Over the cap, the text
  * is cut with a marker, `structuredContent` becomes
  * `{ truncated: true, originalBytes, returnedBytes, maxBytes }`, and the legacy
- * `details` field is dropped, since either would otherwise repeat the full
- * payload. The serialized replacement fits in the cap.
+ * `details` field and any other fields are dropped, since they would otherwise repeat
+ * or add to the payload; only `isError` is kept. The serialized replacement fits in
+ * the cap.
  */
 export const boundResult = <R extends BoundableResult>(
   result: R,
@@ -139,7 +140,9 @@ export const boundResult = <R extends BoundableResult>(
   if (originalBytes <= cap) return result;
 
   const joined = result.content.map((block) => block.text).join("\n");
-  const { details: _details, ...rest } = result;
+  // The replacement keeps only the fields the cap is about. Other fields (the standard
+  // `_meta`, `details`, anything an app added) can be arbitrarily large, so they are dropped.
+  const rest = result.isError === undefined ? {} : { isError: result.isError };
   const widest = { truncated: true, originalBytes, returnedBytes: cap, maxBytes: cap };
   // Everything in the replacement except the text itself, with the widest counts.
   const fixed = serializedBytes({

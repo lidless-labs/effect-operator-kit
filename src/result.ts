@@ -20,7 +20,10 @@ export interface ResultDefaults {
 }
 
 export interface ResultOptions {
-  /** Override the process-wide byte cap for this result. */
+  /**
+   * Override the process-wide byte cap for this result. The MCP adapters apply the
+   * process-wide cap again, so through them a per-call value can lower the cap, not raise it.
+   */
   maxBytes?: number;
   /** Override the process-wide `legacyDetails` setting for this result. */
   legacyDetails?: boolean;
@@ -79,10 +82,14 @@ const finish = <T>(
  * payload is truncated with a marker and `structuredContent.truncated: true`.
  */
 export const ok = <T>(details: T, options: ResultOptions = {}): McpTextResult<T> => {
-  const result: McpTextResult<T> = {
-    content: [{ type: "text", text: toText(details, options.pretty) }],
-  };
-  if (isPlainObject(details)) result.structuredContent = details;
+  const text = toText(details, options.pretty);
+  const result: McpTextResult<T> = { content: [{ type: "text", text }] };
+  if (isPlainObject(details)) {
+    // Use what the wire will carry: a toJSON hook can turn an object literal into an
+    // array or a primitive, which structuredContent may not hold.
+    const snapshot: unknown = JSON.parse(text);
+    if (isPlainObject(snapshot)) result.structuredContent = snapshot;
+  }
   return finish(result, details, options);
 };
 
