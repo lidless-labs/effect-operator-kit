@@ -29,6 +29,25 @@ configureResults({ maxBytes: 60_000, legacyDetails: true });
 
 The non-standard `details` field is no longer emitted. Set `legacyDetails: true` (process-wide or per call) while consumers still read it.
 
+## HTTP response limits
+
+`sendRequest` keeps `timeoutMs` active until the entire response body has been
+consumed. A stalled body fails with `TimeoutError`. Interrupting the Effect
+aborts the fetch and cancels its body reader.
+
+Responses default to a 10 MiB limit on bytes delivered by the response stream,
+including decompressed bytes when fetch decodes content encoding. Set
+`HttpContext.maxResponseBytes` for a client default or
+`HttpRequest.maxResponseBytes` for a request override. The cap must be a positive
+safe integer. Success and error bodies share the cap, including
+`responseType: "none"`, which still returns bounded `bodyText`. Oversized bodies
+fail with `ResponseTooLargeError`, which the default retry predicate does not
+retry. Consumers with exhaustive `OperatorError` switches must handle this tag.
+
+Retries remain disabled unless the caller opts in through `withRetry`. A body
+timeout can occur after the server has applied a mutation. Enable retries only
+when the operation is safe to repeat or the server honors an idempotency key.
+
 ## Streamable HTTP server
 
 `@lidless-labs/effect-operator-kit/streamable-http` replaces the per-repo copies of the HTTP transport. It needs `@modelcontextprotocol/sdk` (an optional peer dependency, so the main entry point does not load it).

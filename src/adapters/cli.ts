@@ -24,6 +24,8 @@ export const formatOperatorError = (error: OperatorError): string => {
       return `${error._tag}: ${error.method} ${error.path} (${error.status})`;
     case "UnexpectedStatusError":
       return `UnexpectedStatusError: ${error.method} ${error.path} (${error.status})`;
+    case "ResponseTooLargeError":
+      return `ResponseTooLargeError: ${error.method} ${error.path} exceeds ${error.maxResponseBytes} bytes`;
     case "TransportError":
       return `TransportError: ${error.method} ${error.path}`;
     default: {
@@ -89,6 +91,7 @@ function isOperatorError(value: unknown): value is OperatorError {
       "NotFoundError",
       "TimeoutError",
       "TransportError",
+      "ResponseTooLargeError",
       "ParseError",
       "UnexpectedStatusError",
     ].includes((value as { _tag: string })._tag)

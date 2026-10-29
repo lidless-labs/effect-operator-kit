@@ -1,6 +1,8 @@
 import { Effect } from "effect";
 import {
   AuthError,
+  ConfigError,
+  ResponseTooLargeError,
   ForbiddenError,
   NotFoundError,
   TimeoutError,
@@ -24,6 +26,8 @@ export interface HttpContext {
   auth?: AuthStrategy;
   defaultHeaders?: HeadersInit;
   timeoutMs: number;
+  /** Maximum decoded response bytes. Defaults to 10 MiB. */
+  maxResponseBytes?: number;
   fetch?: typeof fetch;
   redact?: (value: string) => string;
 }
@@ -37,6 +41,8 @@ export interface HttpRequest {
   bodyEncoding?: BodyEncoding;
   responseType?: "json" | "text" | "none";
   timeoutMs?: number;
+  /** Override the context response byte cap for this request. */
+  maxResponseBytes?: number;
   expectedStatuses?: readonly number[];
   statusMapper?: (input: {
     status: number;
@@ -53,6 +59,8 @@ export interface HttpResponse<T = unknown> {
   bodyText: string;
   body: T;
 }
+
+export const DEFAULT_MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
 
 const DEFAULT_SUCCESS_STATUSES = Array.from({ length: 100 }, (_, i) => 200 + i);
 
@@ -203,33 +211,78 @@ function fetchWithTimeout(
   url: URL,
   init: RequestInit,
   timeoutMs: number,
+  maxResponseBytes: number,
   method: string,
   path: string,
-): Effect.Effect<Response, TimeoutError | TransportError> {
+): Effect.Effect<{ response: Response; bodyText: string }, TimeoutError | TransportError | ResponseTooLargeError> {
   const fetchImpl = ctx.fetch ?? globalThis.fetch;
+  type Result = { response: Response; bodyText: string };
+  type Failure = TimeoutError | TransportError | ResponseTooLargeError;
 
-  return Effect.async<Response, TimeoutError | TransportError>((resume) => {
+  return Effect.async<Result, Failure>((resume) => {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-    const finish = (effect: Effect.Effect<Response, TimeoutError | TransportError>) => {
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    let settled = false;
+    const cancel = () => {
+      controller.abort();
+      // A custom stream may never settle cancel(). Do not hold completion on it.
+      void reader?.cancel().catch(() => {});
+    };
+    const finish = (effect: Effect.Effect<Result, Failure>) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timeoutId);
       resume(effect);
     };
+    const timeoutId = setTimeout(() => {
+      finish(Effect.fail(new TimeoutError({ method, path, timeoutMs })));
+      cancel();
+    }, timeoutMs);
 
-    void fetchImpl(url, { ...init, signal: controller.signal })
-      .then((response) => finish(Effect.succeed(response)))
-      .catch((cause) => {
-        if (cause instanceof Error && cause.name === "AbortError") {
-          finish(
-            Effect.fail(new TimeoutError({ method, path, timeoutMs })),
-          );
+    void (async () => {
+      try {
+        const response = await fetchImpl(url, { ...init, signal: controller.signal });
+        // A custom fetch may ignore abort and return after interruption/timeout.
+        if (settled) {
+          void response.body?.cancel().catch(() => {});
           return;
         }
-        finish(
-          Effect.fail(new TransportError({ method, path, cause })),
-        );
-      });
+        let bodyText = "";
+        if (response.body) {
+          reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let bytes = 0;
+          try {
+            while (!settled) {
+              const { done, value } = await reader.read();
+              if (settled) return;
+              if (done) break;
+              bytes += value.byteLength;
+              if (bytes > maxResponseBytes) {
+                finish(Effect.fail(new ResponseTooLargeError({ method, path, maxResponseBytes })));
+                cancel();
+                return;
+              }
+              bodyText += decoder.decode(value, { stream: true });
+            }
+            bodyText += decoder.decode();
+          } finally {
+            reader.releaseLock();
+            reader = undefined;
+          }
+        }
+        finish(Effect.succeed({ response, bodyText }));
+      } catch (cause) {
+        finish(Effect.fail(new TransportError({ method, path, cause })));
+        cancel();
+      }
+    })();
+
+    return Effect.sync(() => {
+      settled = true;
+      clearTimeout(timeoutId);
+      cancel();
+    });
   });
 }
 
@@ -302,6 +355,13 @@ export const sendRequest = <T = unknown>(
   const url = buildUrl(ctx.baseUrl, req.path, req.query);
   const timeoutMs = req.timeoutMs ?? ctx.timeoutMs;
   const expectedStatuses = resolveExpectedStatuses(req);
+  const maxResponseBytes = req.maxResponseBytes ?? ctx.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
+  if (!Number.isSafeInteger(maxResponseBytes) || maxResponseBytes <= 0) {
+    return Effect.fail(new ConfigError({ key: "maxResponseBytes", message: "maxResponseBytes must be a positive safe integer" }));
+  }
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647) {
+    return Effect.fail(new ConfigError({ key: "timeoutMs", message: "timeoutMs must be positive and at most 2147483647" }));
+  }
 
   return buildHeaders(ctx, req).pipe(
     Effect.flatMap((headers) => {
@@ -317,43 +377,25 @@ export const sendRequest = <T = unknown>(
         url,
         init,
         timeoutMs,
+        maxResponseBytes,
         req.method,
         req.path,
       ).pipe(
-        Effect.flatMap((response) =>
-          Effect.tryPromise({
-            try: () => response.text(),
-            catch: (cause) =>
-              new TransportError({
-                method: req.method,
-                path: req.path,
-                cause,
-              }),
-          }).pipe(
-            Effect.flatMap((bodyText) => {
-              if (!isExpectedStatus(response.status, expectedStatuses)) {
-                return Effect.fail(
-                  mapUnexpectedStatus(
-                    req,
-                    response.status,
-                    bodyText,
-                    expectedStatuses,
-                    ctx.redact,
-                  ),
-                );
-              }
-
-              return parseResponseBody<T>(req, bodyText, ctx.redact).pipe(
-                Effect.map((parsedBody) => ({
-                  status: response.status,
-                  headers: response.headers,
-                  bodyText,
-                  body: parsedBody,
-                })),
-              );
-            }),
-          ),
-        ),
+        Effect.flatMap(({ response, bodyText }) => {
+          if (!isExpectedStatus(response.status, expectedStatuses)) {
+            return Effect.fail(mapUnexpectedStatus(
+              req, response.status, bodyText, expectedStatuses, ctx.redact,
+            ));
+          }
+          return parseResponseBody<T>(req, bodyText, ctx.redact).pipe(
+            Effect.map((parsedBody) => ({
+              status: response.status,
+              headers: response.headers,
+              bodyText,
+              body: parsedBody,
+            })),
+          );
+        }),
       );
     }),
   );
