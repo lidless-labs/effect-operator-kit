@@ -1,6 +1,6 @@
 {
   "name": "@lidless-labs/effect-operator-kit",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Shared Effect plumbing for lidless operator CLIs: config primitives, HTTP request kernel, typed error algebra, opt-in retry, redaction, and MCP result helpers.",
   "license": "MIT",
   "type": "module",
