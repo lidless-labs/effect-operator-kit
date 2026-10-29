@@ -11,8 +11,11 @@ export interface RetryPolicy {
   shouldRetry: (error: OperatorError) => boolean;
 }
 
-/** Default retry predicate: transport, timeout, and 5xx unexpected status only. */
+/** Default retry predicate: transport, timeout, and 5xx failures for read methods. */
 const defaultShouldRetry = (error: OperatorError): boolean => {
+  // A failed response cannot prove that a mutation was not applied.
+  const method = "method" in error ? error.method.toUpperCase() : undefined;
+  if (method && !["GET", "HEAD", "OPTIONS"].includes(method)) return false;
   switch (error._tag) {
     case "TransportError":
     case "TimeoutError":

@@ -42,7 +42,7 @@ describe("HTTP redirect policy", () => {
         return headers;
       }) },
     }), request)));
-    expect(result).toMatchObject({ _tag: "Left", left: { _tag: "TransportError" } });
+    expect(result).toMatchObject({ _tag: "Left", left: { _tag: "ConfigError" } });
     expect(destinationCalls).toBe(0);
   });
 
@@ -77,7 +77,7 @@ describe("HTTP redirect policy", () => {
     const result = await Effect.runPromise(Effect.either(sendRequest(context(baseUrl, {
       redirect: "same-origin", defaultHeaders: { "x-custom-auth": "test-marker" },
     }), request)));
-    expect(result).toMatchObject({ _tag: "Left", left: { _tag: "TransportError" } });
+    expect(result).toMatchObject({ _tag: "Left", left: { _tag: "ConfigError" } });
     expect(destinationCalls).toBe(0);
   });
 
@@ -91,7 +91,7 @@ describe("HTTP redirect policy", () => {
     const result = await Effect.runPromise(Effect.either(sendRequest(context(baseUrl, {
       redirect: "same-origin",
     }), { ...request, redirect: "error" })));
-    expect(result).toMatchObject({ _tag: "Left", left: { _tag: "TransportError" } });
+    expect(result).toMatchObject({ _tag: "Left", left: { _tag: "ConfigError" } });
     expect(calls).toBe(1);
   });
 
@@ -107,7 +107,7 @@ describe("HTTP redirect policy", () => {
     const result = await Effect.runPromise(Effect.either(sendRequest(context(baseUrl, {
       redirect: "same-origin",
     }), request)));
-    expect(result).toMatchObject({ _tag: "Left", left: { _tag: "TransportError" } });
+    expect(result).toMatchObject({ _tag: "Left", left: { _tag: "ConfigError" } });
     expect(calls).toBe(1);
   });
 
@@ -143,7 +143,7 @@ describe("HTTP redirect policy", () => {
       res.end();
     });
     const result = await Effect.runPromise(Effect.either(sendRequest(context(baseUrl, { redirect: "same-origin" }), request)));
-    expect(result).toMatchObject({ _tag: "Left", left: { _tag: "TransportError" } });
+    expect(result).toMatchObject({ _tag: "Left", left: { _tag: "ConfigError" } });
     expect(calls).toBe(11);
   });
 });

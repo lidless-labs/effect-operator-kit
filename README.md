@@ -2,7 +2,7 @@
 
 Shared Effect plumbing for the lidless operator CLIs (adguardctrl, immichctrl, jellyctrl, librenmsctrl, n8nctrl): config primitives, an HTTP request kernel, a typed error algebra, opt-in retry, redaction hooks, and MCP result helpers.
 
-Design and API contract: [docs/design.md](docs/design.md). Service behavior stays in each ctrl repo; this package owns only the duplicated skeleton.
+Design and API contract: [docs/design.md](docs/design.md). Service behavior stays in each ctrl repo. This package owns only the duplicated skeleton.
 
 ## Tool annotations
 
@@ -44,9 +44,12 @@ safe integer. Success and error bodies share the cap, including
 fail with `ResponseTooLargeError`, which the default retry predicate does not
 retry. Consumers with exhaustive `OperatorError` switches must handle this tag.
 
-Retries remain disabled unless the caller opts in through `withRetry`. A body
-timeout can occur after the server has applied a mutation. Enable retries only
-when the operation is safe to repeat or the server honors an idempotency key.
+Retries remain disabled unless the caller opts in through `withRetry`. The
+built-in predicate retries only read methods (GET, HEAD and OPTIONS), because a
+failed response cannot prove that a mutation was not applied. Redirect-policy
+rejections are non-retryable configuration errors. A custom `shouldRetry`
+predicate may permit writes only when the caller establishes replay safety,
+such as a server-enforced idempotency key.
 
 Redirects are rejected by default, including requests that use a custom
 `AuthStrategy` or authentication headers. Set `redirect: "same-origin"` on the
@@ -74,4 +77,4 @@ await runStreamableHttpServer({
 });
 ```
 
-It binds loopback by default and refuses a wildcard bind. A bearer token (32 characters or more, constant-time compare) is required on any non-loopback bind and enforced whenever one is set. Host and Origin are checked against loopback, the bound address and the explicit `allowedHosts` / `allowedOrigins` lists (a guard against cross-site requests; the server sends no CORS headers and does not answer preflight, so it is for non-browser MCP clients), bodies are capped at 1 MiB, and sessions are capped (128) and reaped when idle (30 minutes). Pass `stateless: true` for one server per request with no sessions.
+It binds loopback by default and refuses a wildcard bind. A bearer token (32 characters or more, constant-time compare) is required on any non-loopback bind and enforced whenever one is set. Host and Origin are checked against loopback, the bound address and the explicit `allowedHosts` / `allowedOrigins` lists (a guard against cross-site requests. The server sends no CORS headers and does not answer preflight, so it is for non-browser MCP clients), bodies are capped at 1 MiB, and sessions are capped (128) and reaped when idle (30 minutes). Pass `stateless: true` for one server per request with no sessions.

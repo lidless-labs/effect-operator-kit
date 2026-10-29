@@ -220,10 +220,10 @@ function fetchWithTimeout(
   redirect: RedirectPolicy,
   method: string,
   path: string,
-): Effect.Effect<{ response: Response; bodyText: string }, TimeoutError | TransportError | ResponseTooLargeError> {
+): Effect.Effect<{ response: Response; bodyText: string }, TimeoutError | TransportError | ResponseTooLargeError | ConfigError> {
   const fetchImpl = ctx.fetch ?? globalThis.fetch;
   type Result = { response: Response; bodyText: string };
-  type Failure = TimeoutError | TransportError | ResponseTooLargeError;
+  type Failure = TimeoutError | TransportError | ResponseTooLargeError | ConfigError;
 
   return Effect.async<Result, Failure>((resume) => {
     const controller = new AbortController();
@@ -261,11 +261,13 @@ function fetchWithTimeout(
           if (![301, 302, 303, 307, 308].includes(response.status) || location === null) break;
           // Redirect bodies are never buffered, including rejected targets.
           void response.body?.cancel().catch(() => {});
-          if (redirect !== "same-origin") throw new TypeError("HTTP redirects are disabled");
-          if (hops >= 10) throw new TypeError("HTTP redirect limit exceeded");
-          const next = new URL(location, currentUrl);
+          if (redirect !== "same-origin") throw new ConfigError({ key: "redirect", message: "HTTP redirects are disabled" });
+          if (hops >= 10) throw new ConfigError({ key: "redirect", message: "HTTP redirect limit exceeded" });
+          let next: URL;
+          try { next = new URL(location, currentUrl); }
+          catch { throw new ConfigError({ key: "redirect", message: "HTTP redirect location is invalid" }); }
           if (next.origin !== url.origin || next.username || next.password) {
-            throw new TypeError("HTTP redirect must stay on the original origin without URL userinfo");
+            throw new ConfigError({ key: "redirect", message: "HTTP redirect must stay on the original origin without URL userinfo" });
           }
           if (((response.status === 301 || response.status === 302) && currentInit.method === "POST") ||
               (response.status === 303 && currentInit.method !== "GET" && currentInit.method !== "HEAD")) {
@@ -303,7 +305,7 @@ function fetchWithTimeout(
         }
         finish(Effect.succeed({ response, bodyText }));
       } catch (cause) {
-        finish(Effect.fail(new TransportError({ method, path, cause })));
+        finish(Effect.fail(cause instanceof ConfigError ? cause : new TransportError({ method, path, cause })));
         cancel();
       }
     })();
