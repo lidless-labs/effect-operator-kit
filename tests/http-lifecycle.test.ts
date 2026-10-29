@@ -17,6 +17,49 @@ const request = { method: "GET", path: "data", responseType: "text" } as const;
 afterEach(() => vi.useRealTimers());
 
 describe("HTTP response lifetime", () => {
+  it("enforces the shipped 10 MiB cap even when response parsing is disabled", async () => {
+    const fetch = vi.fn(async () => new Response(new Uint8Array(10 * 1024 * 1024 + 1)));
+    const result = await Effect.runPromise(Effect.either(sendRequest(context(fetch), {
+      ...request, responseType: "none",
+    })));
+    expect(result).toMatchObject({
+      _tag: "Left", left: { _tag: "ResponseTooLargeError", maxResponseBytes: 10_485_760 },
+    });
+  });
+
+  it("clears the deadline after a complete response", async () => {
+    vi.useFakeTimers();
+    let signal: AbortSignal | undefined;
+    const fetch = vi.fn(async (_url, init) => {
+      signal = init.signal;
+      return new Response("done");
+    });
+    const result = await Effect.runPromise(sendRequest(context(fetch), request));
+    expect(result.body).toBe("done");
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(signal?.aborted).toBe(false);
+  });
+
+  it("uses one deadline across redirects and final body reads", async () => {
+    vi.useFakeTimers();
+    let attempts = 0;
+    const fetch = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      attempts += 1;
+      return attempts === 1
+        ? new Response(null, { status: 302, headers: { location: "/end" } })
+        : new Response("done");
+    });
+    const run = Effect.runPromise(Effect.either(sendRequest(context(fetch, { redirect: "same-origin" }), request)));
+    let result: Awaited<typeof run> | undefined;
+    void run.then((value) => { result = value; });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(result).toMatchObject({ _tag: "Left", left: { _tag: "TimeoutError", timeoutMs: 40 } });
+    await vi.advanceTimersByTimeAsync(20);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("reports byte-limit failures with request context through CLI and MCP adapters", async () => {
     const error = new ResponseTooLargeError({ method: "GET", path: "/data", maxResponseBytes: 5 });
     const lines: string[] = [];
@@ -121,6 +164,13 @@ describe("HTTP response lifetime", () => {
     const fetch = vi.fn(async () => new Response("ok"));
     const result = await Effect.runPromise(Effect.either(sendRequest(context(fetch, { maxResponseBytes }), request)));
     expect(result).toMatchObject({ _tag: "Left", left: { _tag: "ConfigError", key: "maxResponseBytes" } });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([0, -1, NaN, Infinity, 2_147_483_648])("rejects invalid timeout %s before network I/O", async (timeoutMs) => {
+    const fetch = vi.fn(async () => new Response("ok"));
+    const result = await Effect.runPromise(Effect.either(sendRequest(context(fetch, { timeoutMs }), request)));
+    expect(result).toMatchObject({ _tag: "Left", left: { _tag: "ConfigError", key: "timeoutMs" } });
     expect(fetch).not.toHaveBeenCalled();
   });
 
