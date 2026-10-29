@@ -48,6 +48,16 @@ Retries remain disabled unless the caller opts in through `withRetry`. A body
 timeout can occur after the server has applied a mutation. Enable retries only
 when the operation is safe to repeat or the server honors an idempotency key.
 
+Redirects are rejected by default, including requests that use a custom
+`AuthStrategy` or authentication headers. Set `redirect: "same-origin"` on the
+context or request to allow up to 10 redirects on the original origin. Each hop
+rejects URL userinfo and origin changes before another request is sent.
+Same-origin redirects keep header precedence and fetch method/body semantics:
+301/302 change POST to GET, 303 changes methods other than GET/HEAD to GET, and
+307/308 preserve the method and body. One deadline covers the entire chain and
+final body. Injected fetch implementations must honor `redirect: "manual"` and
+the supplied abort signal.
+
 ## Streamable HTTP server
 
 `@lidless-labs/effect-operator-kit/streamable-http` replaces the per-repo copies of the HTTP transport. It needs `@modelcontextprotocol/sdk` (an optional peer dependency, so the main entry point does not load it).
