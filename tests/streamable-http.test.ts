@@ -349,15 +349,18 @@ describe("Host and Origin checks", () => {
 
   it("accepts the address in the returned url when bound by a DNS name", async () => {
     const name = osHostname();
-    let address: string;
+    let addresses: string[];
     try {
-      address = (await lookup(name, { family: 4 })).address;
+      addresses = (await lookup(name, { all: true })).map(({ address, family }) =>
+        new URL(`http://${family === 6 ? `[${address}]` : address}`).hostname,
+      );
     } catch {
       return; // the machine name does not resolve here, so there is nothing to bind by name
     }
     const handle = await start({ host: name });
     const url = new URL(handle.url);
-    expect(url.hostname).toBe(address);
+    expect(addresses).toContain(url.hostname);
+    const address = url.hostname.replace(/^\[|\]$/g, "");
     const res = await raw(handle, { path: "/healthz", address, headers: { host: url.host } });
     expect(res.status).toBe(200);
   });

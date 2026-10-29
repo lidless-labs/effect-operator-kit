@@ -1,6 +1,8 @@
 import { Effect } from "effect";
 import {
   AuthError,
+  ConfigError,
+  ResponseTooLargeError,
   ForbiddenError,
   NotFoundError,
   TimeoutError,
@@ -13,6 +15,7 @@ import { defaultRedact } from "./redaction.js";
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD";
 export type QueryValue = string | number | boolean | null | undefined;
+export type RedirectPolicy = "error" | "same-origin";
 export type BodyEncoding = "json" | "text" | "form" | "none";
 
 export interface AuthStrategy {
@@ -24,6 +27,10 @@ export interface HttpContext {
   auth?: AuthStrategy;
   defaultHeaders?: HeadersInit;
   timeoutMs: number;
+  /** Maximum decoded response bytes. Defaults to 10 MiB. */
+  maxResponseBytes?: number;
+  /** Redirects are rejected by default. Opt in to at most 10 same-origin hops. */
+  redirect?: RedirectPolicy;
   fetch?: typeof fetch;
   redact?: (value: string) => string;
 }
@@ -37,6 +44,10 @@ export interface HttpRequest {
   bodyEncoding?: BodyEncoding;
   responseType?: "json" | "text" | "none";
   timeoutMs?: number;
+  /** Override the context response byte cap for this request. */
+  maxResponseBytes?: number;
+  /** Override the context redirect policy for this request. */
+  redirect?: RedirectPolicy;
   expectedStatuses?: readonly number[];
   statusMapper?: (input: {
     status: number;
@@ -53,6 +64,8 @@ export interface HttpResponse<T = unknown> {
   bodyText: string;
   body: T;
 }
+
+export const DEFAULT_MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
 
 const DEFAULT_SUCCESS_STATUSES = Array.from({ length: 100 }, (_, i) => 200 + i);
 
@@ -203,33 +216,105 @@ function fetchWithTimeout(
   url: URL,
   init: RequestInit,
   timeoutMs: number,
+  maxResponseBytes: number,
+  redirect: RedirectPolicy,
   method: string,
   path: string,
-): Effect.Effect<Response, TimeoutError | TransportError> {
+): Effect.Effect<{ response: Response; bodyText: string }, TimeoutError | TransportError | ResponseTooLargeError | ConfigError> {
   const fetchImpl = ctx.fetch ?? globalThis.fetch;
+  type Result = { response: Response; bodyText: string };
+  type Failure = TimeoutError | TransportError | ResponseTooLargeError | ConfigError;
 
-  return Effect.async<Response, TimeoutError | TransportError>((resume) => {
+  return Effect.async<Result, Failure>((resume) => {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-    const finish = (effect: Effect.Effect<Response, TimeoutError | TransportError>) => {
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    let settled = false;
+    const cancel = () => {
+      controller.abort();
+      // A custom stream may never settle cancel(). Do not hold completion on it.
+      void reader?.cancel().catch(() => {});
+    };
+    const finish = (effect: Effect.Effect<Result, Failure>) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timeoutId);
       resume(effect);
     };
+    const timeoutId = setTimeout(() => {
+      finish(Effect.fail(new TimeoutError({ method, path, timeoutMs })));
+      cancel();
+    }, timeoutMs);
 
-    void fetchImpl(url, { ...init, signal: controller.signal })
-      .then((response) => finish(Effect.succeed(response)))
-      .catch((cause) => {
-        if (cause instanceof Error && cause.name === "AbortError") {
-          finish(
-            Effect.fail(new TimeoutError({ method, path, timeoutMs })),
-          );
-          return;
+    void (async () => {
+      try {
+        let currentUrl = url;
+        let currentInit = { ...init, redirect: "manual" as const, signal: controller.signal };
+        let response: Response;
+        for (let hops = 0; ; hops += 1) {
+          response = await fetchImpl(currentUrl, currentInit);
+          // A custom fetch may ignore abort and return after interruption/timeout.
+          if (settled) {
+            void response.body?.cancel().catch(() => {});
+            return;
+          }
+          const location = response.headers.get("location");
+          if (![301, 302, 303, 307, 308].includes(response.status) || location === null) break;
+          // Redirect bodies are never buffered, including rejected targets.
+          void response.body?.cancel().catch(() => {});
+          if (redirect !== "same-origin") throw new ConfigError({ key: "redirect", message: "HTTP redirects are disabled" });
+          if (hops >= 10) throw new ConfigError({ key: "redirect", message: "HTTP redirect limit exceeded" });
+          let next: URL;
+          try { next = new URL(location, currentUrl); }
+          catch { throw new ConfigError({ key: "redirect", message: "HTTP redirect location is invalid" }); }
+          if (next.origin !== url.origin || next.username || next.password) {
+            throw new ConfigError({ key: "redirect", message: "HTTP redirect must stay on the original origin without URL userinfo" });
+          }
+          if (((response.status === 301 || response.status === 302) && currentInit.method === "POST") ||
+              (response.status === 303 && currentInit.method !== "GET" && currentInit.method !== "HEAD")) {
+            const headers = new Headers(currentInit.headers);
+            for (const name of ["content-type", "content-encoding", "content-language", "content-location", "content-length"]) {
+              headers.delete(name);
+            }
+            currentInit = { ...currentInit, method: "GET", body: undefined, headers };
+          }
+          currentUrl = next;
         }
-        finish(
-          Effect.fail(new TransportError({ method, path, cause })),
-        );
-      });
+        let bodyText = "";
+        if (response.body) {
+          reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let bytes = 0;
+          try {
+            while (!settled) {
+              const { done, value } = await reader.read();
+              if (settled) return;
+              if (done) break;
+              bytes += value.byteLength;
+              if (bytes > maxResponseBytes) {
+                finish(Effect.fail(new ResponseTooLargeError({ method, path, maxResponseBytes })));
+                cancel();
+                return;
+              }
+              bodyText += decoder.decode(value, { stream: true });
+            }
+            bodyText += decoder.decode();
+          } finally {
+            reader.releaseLock();
+            reader = undefined;
+          }
+        }
+        finish(Effect.succeed({ response, bodyText }));
+      } catch (cause) {
+        finish(Effect.fail(cause instanceof ConfigError ? cause : new TransportError({ method, path, cause })));
+        cancel();
+      }
+    })();
+
+    return Effect.sync(() => {
+      settled = true;
+      clearTimeout(timeoutId);
+      cancel();
+    });
   });
 }
 
@@ -302,6 +387,14 @@ export const sendRequest = <T = unknown>(
   const url = buildUrl(ctx.baseUrl, req.path, req.query);
   const timeoutMs = req.timeoutMs ?? ctx.timeoutMs;
   const expectedStatuses = resolveExpectedStatuses(req);
+  const redirect = req.redirect ?? ctx.redirect ?? "error";
+  const maxResponseBytes = req.maxResponseBytes ?? ctx.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
+  if (!Number.isSafeInteger(maxResponseBytes) || maxResponseBytes <= 0) {
+    return Effect.fail(new ConfigError({ key: "maxResponseBytes", message: "maxResponseBytes must be a positive safe integer" }));
+  }
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647) {
+    return Effect.fail(new ConfigError({ key: "timeoutMs", message: "timeoutMs must be positive and at most 2147483647" }));
+  }
 
   return buildHeaders(ctx, req).pipe(
     Effect.flatMap((headers) => {
@@ -317,43 +410,26 @@ export const sendRequest = <T = unknown>(
         url,
         init,
         timeoutMs,
+        maxResponseBytes,
+        redirect,
         req.method,
         req.path,
       ).pipe(
-        Effect.flatMap((response) =>
-          Effect.tryPromise({
-            try: () => response.text(),
-            catch: (cause) =>
-              new TransportError({
-                method: req.method,
-                path: req.path,
-                cause,
-              }),
-          }).pipe(
-            Effect.flatMap((bodyText) => {
-              if (!isExpectedStatus(response.status, expectedStatuses)) {
-                return Effect.fail(
-                  mapUnexpectedStatus(
-                    req,
-                    response.status,
-                    bodyText,
-                    expectedStatuses,
-                    ctx.redact,
-                  ),
-                );
-              }
-
-              return parseResponseBody<T>(req, bodyText, ctx.redact).pipe(
-                Effect.map((parsedBody) => ({
-                  status: response.status,
-                  headers: response.headers,
-                  bodyText,
-                  body: parsedBody,
-                })),
-              );
-            }),
-          ),
-        ),
+        Effect.flatMap(({ response, bodyText }) => {
+          if (!isExpectedStatus(response.status, expectedStatuses)) {
+            return Effect.fail(mapUnexpectedStatus(
+              req, response.status, bodyText, expectedStatuses, ctx.redact,
+            ));
+          }
+          return parseResponseBody<T>(req, bodyText, ctx.redact).pipe(
+            Effect.map((parsedBody) => ({
+              status: response.status,
+              headers: response.headers,
+              bodyText,
+              body: parsedBody,
+            })),
+          );
+        }),
       );
     }),
   );

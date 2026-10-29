@@ -2,7 +2,7 @@
 
 Shared Effect plumbing for the lidless operator CLIs (adguardctrl, immichctrl, jellyctrl, librenmsctrl, n8nctrl): config primitives, an HTTP request kernel, a typed error algebra, opt-in retry, redaction hooks, and MCP result helpers.
 
-Design and API contract: [docs/design.md](docs/design.md). Service behavior stays in each ctrl repo; this package owns only the duplicated skeleton.
+Design and API contract: [docs/design.md](docs/design.md). Service behavior stays in each ctrl repo. This package owns only the duplicated skeleton.
 
 ## Tool annotations
 
@@ -29,6 +29,38 @@ configureResults({ maxBytes: 60_000, legacyDetails: true });
 
 The non-standard `details` field is no longer emitted. Set `legacyDetails: true` (process-wide or per call) while consumers still read it.
 
+## HTTP response limits
+
+`sendRequest` keeps `timeoutMs` active until the entire response body has been
+consumed. A stalled body fails with `TimeoutError`. Interrupting the Effect
+aborts the fetch and cancels its body reader.
+
+Responses default to a 10 MiB limit on bytes delivered by the response stream,
+including decompressed bytes when fetch decodes content encoding. Set
+`HttpContext.maxResponseBytes` for a client default or
+`HttpRequest.maxResponseBytes` for a request override. The cap must be a positive
+safe integer. Success and error bodies share the cap, including
+`responseType: "none"`, which still returns bounded `bodyText`. Oversized bodies
+fail with `ResponseTooLargeError`, which the default retry predicate does not
+retry. Consumers with exhaustive `OperatorError` switches must handle this tag.
+
+Retries remain disabled unless the caller opts in through `withRetry`. The
+built-in predicate retries only read methods (GET, HEAD and OPTIONS), because a
+failed response cannot prove that a mutation was not applied. Redirect-policy
+rejections are non-retryable configuration errors. A custom `shouldRetry`
+predicate may permit writes only when the caller establishes replay safety,
+such as a server-enforced idempotency key.
+
+Redirects are rejected by default, including requests that use a custom
+`AuthStrategy` or authentication headers. Set `redirect: "same-origin"` on the
+context or request to allow up to 10 redirects on the original origin. Each hop
+rejects URL userinfo and origin changes before another request is sent.
+Same-origin redirects keep header precedence and fetch method/body semantics:
+301/302 change POST to GET, 303 changes methods other than GET/HEAD to GET, and
+307/308 preserve the method and body. One deadline covers the entire chain and
+final body. Injected fetch implementations must honor `redirect: "manual"` and
+the supplied abort signal.
+
 ## Streamable HTTP server
 
 `@lidless-labs/effect-operator-kit/streamable-http` replaces the per-repo copies of the HTTP transport. It needs `@modelcontextprotocol/sdk` (an optional peer dependency, so the main entry point does not load it).
@@ -45,4 +77,4 @@ await runStreamableHttpServer({
 });
 ```
 
-It binds loopback by default and refuses a wildcard bind. A bearer token (32 characters or more, constant-time compare) is required on any non-loopback bind and enforced whenever one is set. Host and Origin are checked against loopback, the bound address and the explicit `allowedHosts` / `allowedOrigins` lists (a guard against cross-site requests; the server sends no CORS headers and does not answer preflight, so it is for non-browser MCP clients), bodies are capped at 1 MiB, and sessions are capped (128) and reaped when idle (30 minutes). Pass `stateless: true` for one server per request with no sessions.
+It binds loopback by default and refuses a wildcard bind. A bearer token (32 characters or more, constant-time compare) is required on any non-loopback bind and enforced whenever one is set. Host and Origin are checked against loopback, the bound address and the explicit `allowedHosts` / `allowedOrigins` lists (a guard against cross-site requests. The server sends no CORS headers and does not answer preflight, so it is for non-browser MCP clients), bodies are capped at 1 MiB, and sessions are capped (128) and reaped when idle (30 minutes). Pass `stateless: true` for one server per request with no sessions.

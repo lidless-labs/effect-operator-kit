@@ -11,6 +11,7 @@ type TaggedShape = {
   path?: string;
   status?: number;
   timeoutMs?: number;
+  maxResponseBytes?: number;
   key?: string;
 };
 
@@ -55,6 +56,7 @@ function formatTaggedThin(error: {
   path?: string;
   status?: number;
   timeoutMs?: number;
+  maxResponseBytes?: number;
   key?: string;
 }): string {
   switch (error._tag) {
@@ -71,6 +73,8 @@ function formatTaggedThin(error: {
       return `${error._tag}: ${error.method ?? "?"} ${error.path ?? "?"}${
         error.status !== undefined ? ` (${error.status})` : ""
       }`;
+    case "ResponseTooLargeError":
+      return `ResponseTooLargeError: ${error.method ?? "?"} ${error.path ?? "?"} exceeds ${error.maxResponseBytes ?? "?"} bytes`;
     case "TransportError":
       return `TransportError: ${error.method ?? "?"} ${error.path ?? "?"}`;
     case "ParseError":

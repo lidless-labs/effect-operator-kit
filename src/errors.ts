@@ -40,6 +40,13 @@ export class TransportError extends Data.TaggedError("TransportError")<{
   cause: unknown;
 }> {}
 
+/** Response byte cap exceeded. Non-retryable by the default retry policy. */
+export class ResponseTooLargeError extends Data.TaggedError("ResponseTooLargeError")<{
+  method: string;
+  path: string;
+  maxResponseBytes: number;
+}> {}
+
 export class ParseError extends Data.TaggedError("ParseError")<{
   path?: string;
   body?: string;
@@ -62,5 +69,6 @@ export type OperatorError =
   | NotFoundError
   | TimeoutError
   | TransportError
+  | ResponseTooLargeError
   | ParseError
   | UnexpectedStatusError;
